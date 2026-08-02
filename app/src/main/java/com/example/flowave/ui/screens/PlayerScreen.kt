@@ -152,6 +152,15 @@ fun PlayerScreen(
                     IconButton(onClick = onOpenEqualizerClick, modifier = Modifier.testTag("player_eq_btn")) {
                         Icon(Icons.Default.Equalizer, contentDescription = "Equalizer", tint = CyanNeon)
                     }
+                    IconButton(
+                        onClick = {
+                            audioEngine.stopPlayback()
+                            onCloseClick()
+                        },
+                        modifier = Modifier.testTag("player_stop_btn_top")
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = "Stop & Reset App", tint = Color.Red)
+                    }
                 }
             }
 
@@ -490,6 +499,22 @@ fun PlayerScreen(
                 // Next
                 IconButton(onClick = { audioEngine.playNext() }, modifier = Modifier.testTag("player_next_btn")) {
                     Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = TextPrimary, modifier = Modifier.size(36.dp))
+                }
+
+                // Stop Button
+                IconButton(
+                    onClick = {
+                        audioEngine.stopPlayback()
+                        onCloseClick()
+                    },
+                    modifier = Modifier.testTag("player_stop_btn")
+                ) {
+                    Icon(
+                        Icons.Default.Stop,
+                        contentDescription = "Stop Track",
+                        tint = Color.Red,
+                        modifier = Modifier.size(28.dp)
+                    )
                 }
 
                 // Repeat

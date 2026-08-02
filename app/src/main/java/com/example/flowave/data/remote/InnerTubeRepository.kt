@@ -13,6 +13,32 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
+data class InnerTubeClientConfig(
+    val clientName: String,
+    val clientVersion: String,
+    val userAgent: String
+)
+
+object InnerTubeClients {
+    val ANDROID_MUSIC = InnerTubeClientConfig(
+        clientName = "ANDROID_MUSIC",
+        clientVersion = "6.25.52",
+        userAgent = "com.google.android.apps.youtube.music/6.25.52 (Linux; U; Android 13; US)"
+    )
+    val WEB_REMIX = InnerTubeClientConfig(
+        clientName = "WEB_REMIX",
+        clientVersion = "1.20231218.01.00",
+        userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    val TVHTML5_SIMPLY_EMBEDDED = InnerTubeClientConfig(
+        clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+        clientVersion = "2.0",
+        userAgent = "Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebkit/538.1"
+    )
+
+    val FALLBACK_CHAIN = listOf(ANDROID_MUSIC, WEB_REMIX, TVHTML5_SIMPLY_EMBEDDED)
+}
+
 class InnerTubeRepository {
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -31,8 +57,8 @@ class InnerTubeRepository {
             val requestBodyJson = JSONObject().apply {
                 put("context", JSONObject().apply {
                     put("client", JSONObject().apply {
-                        put("clientName", "WEB_REMIX")
-                        put("clientVersion", "1.20231218.01.00")
+                        put("clientName", InnerTubeClients.WEB_REMIX.clientName)
+                        put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
                         put("hl", "en")
                         put("gl", "US")
                     })
@@ -44,7 +70,7 @@ class InnerTubeRepository {
             val request = Request.Builder()
                 .url("https://music.youtube.com/youtubei/v1/search?alt=json")
                 .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
                 .header("Origin", "https://music.youtube.com")
                 .build()
 
@@ -109,24 +135,18 @@ class InnerTubeRepository {
         // Check cache first (valid for 2 hours = 7,200,000 ms)
         val cached = streamUrlCache[videoId]
         if (cached != null && (System.currentTimeMillis() - cached.first) < 7_200_000L) {
+            android.util.Log.d("FloWaveInnerTube", "Stream URL for $videoId served from in-memory URL cache")
             return@withContext cached.second
         }
 
-        // Multi-Client Fallback Chain like Velune
-        val clients = listOf(
-            Triple("ANDROID_MUSIC", "6.25.52", "com.google.android.apps.youtube.music/6.25.52 (Linux; U; Android 13)"),
-            Triple("WEB_REMIX", "1.20231218.01.00", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"),
-            Triple("IOS", "19.09.3", "com.google.ios.youtube/19.09.3 (iPhone; CPU iPhone OS 17_4 like Mac OS X)"),
-            Triple("TVHTML5_SIMPLY_EMBEDDED_PLAYER", "2.0", "Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebkit/538.1")
-        )
-
-        for ((clientName, clientVersion, userAgent) in clients) {
+        // Multi-Client Fallback Chain: ANDROID_MUSIC -> WEB_REMIX -> TVHTML5_SIMPLY_EMBEDDED
+        for (clientConfig in InnerTubeClients.FALLBACK_CHAIN) {
             try {
                 val requestBodyJson = JSONObject().apply {
                     put("context", JSONObject().apply {
                         put("client", JSONObject().apply {
-                            put("clientName", clientName)
-                            put("clientVersion", clientVersion)
+                            put("clientName", clientConfig.clientName)
+                            put("clientVersion", clientConfig.clientVersion)
                             put("hl", "en")
                             put("gl", "US")
                         })
@@ -137,7 +157,7 @@ class InnerTubeRepository {
                 val request = Request.Builder()
                     .url("https://www.youtube.com/youtubei/v1/player")
                     .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
-                    .header("User-Agent", userAgent)
+                    .header("User-Agent", clientConfig.userAgent)
                     .build()
 
                 val response = client.newCall(request).execute()
@@ -151,8 +171,50 @@ class InnerTubeRepository {
                     if (adaptiveFormats != null) {
                         val extractedUrl = parseAudioUrl(adaptiveFormats)
                         if (extractedUrl != null) {
+                            android.util.Log.d("FloWaveInnerTube", "Stream for $videoId successfully served by InnerTube client: ${clientConfig.clientName}")
                             streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
                             return@withContext extractedUrl
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("FloWaveInnerTube", "InnerTube client ${clientConfig.clientName} failed for $videoId: ${e.message}")
+            }
+        }
+
+        // Piped Public API Fallback Stream Extraction
+        val pipedInstances = listOf(
+            "https://pipedapi.kavin.rocks/streams/",
+            "https://api.piped.video/streams/",
+            "https://pipedapi.mha.fi/streams/"
+        )
+        for (instance in pipedInstances) {
+            try {
+                val request = Request.Builder()
+                    .url("$instance$videoId")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .build()
+                val response = client.newCall(request).execute()
+                val bodyString = response.body?.string() ?: ""
+                if (response.isSuccessful && bodyString.isNotEmpty()) {
+                    val json = JSONObject(bodyString)
+                    val audioStreams = json.optJSONArray("audioStreams")
+                    if (audioStreams != null && audioStreams.length() > 0) {
+                        var bestPipedUrl: String? = null
+                        var maxBitrate = 0
+                        for (i in 0 until audioStreams.length()) {
+                            val stream = audioStreams.optJSONObject(i) ?: continue
+                            val url = stream.optString("url")
+                            val bitrate = stream.optInt("bitrate", 0)
+                            if (url.isNotEmpty() && bitrate >= maxBitrate) {
+                                maxBitrate = bitrate
+                                bestPipedUrl = url
+                            }
+                        }
+                        if (bestPipedUrl != null) {
+                            android.util.Log.d("FloWaveInnerTube", "Stream for $videoId served by Piped instance: $instance")
+                            streamUrlCache[videoId] = Pair(System.currentTimeMillis(), bestPipedUrl)
+                            return@withContext bestPipedUrl
                         }
                     }
                 }
@@ -162,28 +224,56 @@ class InnerTubeRepository {
         }
 
         // Unfailing High Quality Fallback Stream
+        android.util.Log.w("FloWaveInnerTube", "Falling back to soundhelix stream for $videoId")
         val fallback = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
         streamUrlCache[videoId] = Pair(System.currentTimeMillis(), fallback)
         fallback
     }
 
+    private data class FormatCandidate(
+        val url: String,
+        val bitrate: Int,
+        val mimeType: String,
+        val itag: Int
+    )
+
     private fun parseAudioUrl(formats: JSONArray): String? {
-        var bestUrl: String? = null
-        var highestBitrate = 0
+        var bestOpus: FormatCandidate? = null
+        var bestAac: FormatCandidate? = null
+        var bestOther: FormatCandidate? = null
 
         for (i in 0 until formats.length()) {
             val format = formats.optJSONObject(i) ?: continue
+
+            // Reject ciphered formats completely
+            if (format.has("signatureCipher") || format.has("cipher")) continue
+
+            val url = format.optString("url")
+            if (url.isEmpty() || !url.startsWith("http")) continue
+
             val mimeType = format.optString("mimeType")
-            if (mimeType.contains("audio/")) {
-                val url = format.optString("url")
-                val bitrate = format.optInt("bitrate", 0)
-                if (url.isNotEmpty() && bitrate >= highestBitrate) {
-                    highestBitrate = bitrate
-                    bestUrl = url
+            if (!mimeType.contains("audio/")) continue
+
+            val bitrate = format.optInt("bitrate", 0)
+            val itag = format.optInt("itag", 0)
+            val candidate = FormatCandidate(url, bitrate, mimeType, itag)
+
+            if (mimeType.contains("opus") || itag == 251) {
+                if (bestOpus == null || candidate.bitrate > bestOpus.bitrate) {
+                    bestOpus = candidate
+                }
+            } else if (mimeType.contains("mp4a") || mimeType.contains("aac") || itag == 140) {
+                if (bestAac == null || candidate.bitrate > bestAac.bitrate) {
+                    bestAac = candidate
+                }
+            } else {
+                if (bestOther == null || candidate.bitrate > bestOther.bitrate) {
+                    bestOther = candidate
                 }
             }
         }
-        return bestUrl
+
+        return (bestOpus ?: bestAac ?: bestOther)?.url
     }
 
     private fun getHighResThumbnail(thumbnailUrl: String, videoId: String): String {

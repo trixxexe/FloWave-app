@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
@@ -35,6 +36,7 @@ fun MiniPlayer(
     onNextClick: () -> Unit,
     onFavoriteClick: () -> Unit,
     onExpandClick: () -> Unit,
+    onCloseClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val track = playbackState.currentTrack ?: return
@@ -42,16 +44,16 @@ fun MiniPlayer(
     GlassCard(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 2.dp)
             .clickable { onExpandClick() }
             .testTag("mini_player_card"),
-        cornerRadius = 18.dp
+        cornerRadius = 14.dp
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(10.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Artwork
@@ -60,26 +62,26 @@ fun MiniPlayer(
                     contentDescription = "Track Artwork",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(8.dp))
                 )
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(10.dp))
 
                 // Title & Artist
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = track.title,
                         color = TextPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = track.artist,
                         color = TextMuted,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -88,12 +90,15 @@ fun MiniPlayer(
                 // Favorite
                 IconButton(
                     onClick = onFavoriteClick,
-                    modifier = Modifier.testTag("mini_player_favorite_btn")
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag("mini_player_favorite_btn")
                 ) {
                     Icon(
                         imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = "Favorite",
-                        tint = if (track.isFavorite) CyanNeon else TextMuted
+                        tint = if (track.isFavorite) CyanNeon else TextMuted,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
@@ -101,6 +106,7 @@ fun MiniPlayer(
                 IconButton(
                     onClick = onPlayPauseClick,
                     modifier = Modifier
+                        .size(34.dp)
                         .clip(CircleShape)
                         .testTag("mini_player_play_pause_btn")
                 ) {
@@ -108,31 +114,49 @@ fun MiniPlayer(
                         imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = "Play/Pause",
                         tint = CyanNeon,
-                        modifier = Modifier.size(30.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
                 // Next
                 IconButton(
                     onClick = onNextClick,
-                    modifier = Modifier.testTag("mini_player_next_btn")
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag("mini_player_next_btn")
                 ) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Next",
-                        tint = TextPrimary
+                        tint = TextPrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                // Close / Cross Dismiss Button
+                IconButton(
+                    onClick = onCloseClick,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .testTag("mini_player_close_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Hide MiniPlayer",
+                        tint = TextMuted,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
 
-            // Progress Bar Line
+            // Sleek Progress Line
             if (playbackState.durationMs > 0) {
                 val progress = (playbackState.currentPositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
                 LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(3.dp),
+                        .height(2.dp),
                     color = CyanNeon,
                     trackColor = Color(0x22FFFFFF)
                 )

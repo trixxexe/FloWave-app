@@ -98,9 +98,14 @@ class FloWaveAudioEngine(private val context: Context) {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
+        val cacheDataSourceFactory = FloWaveCacheManager.createCacheDataSourceFactory(context)
+        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
+            .setDataSourceFactory(cacheDataSourceFactory)
+
         exoPlayer = ExoPlayer.Builder(context)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
+            .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
                 addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -167,6 +172,17 @@ class FloWaveAudioEngine(private val context: Context) {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    fun stopPlayback() {
+        try {
+            exoPlayer?.stop()
+            exoPlayer?.clearMediaItems()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        stopProgressLoop()
+        _playbackState.value = PlaybackState()
     }
 
     fun setQueueAndPlay(queue: List<Track>, startIndex: Int = 0) {

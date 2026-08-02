@@ -19,6 +19,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.flowave.audio.FloWaveAudioEngine
 import com.example.flowave.data.model.InnerTubeTrack
@@ -59,8 +60,9 @@ fun MainScreen() {
     var searchOnlineResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var currentLrcLines by remember { mutableStateOf<List<LrcLine>>(emptyList()) }
 
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Home, 1: Library, 2: Equalizer, 3: Profile, 4: Downloader
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Home, 1: Explore, 2: Library, 3: Downloader, 4: EQ DSP, 5: Profile
     var isPlayerExpanded by remember { mutableStateOf(false) }
+    var isMiniPlayerDismissed by remember { mutableStateOf(false) }
     var editingTrack by remember { mutableStateOf<Track?>(null) }
     var lastBackPressedTime by remember { mutableLongStateOf(0L) }
 
@@ -97,6 +99,7 @@ fun MainScreen() {
     LaunchedEffect(playbackState.currentTrack) {
         val track = playbackState.currentTrack
         if (track != null) {
+            isMiniPlayerDismissed = false // Reset mini player visibility on track change
             try {
                 currentLrcLines = innerTubeRepo.fetchLrcLyrics(track.title, track.artist)
             } catch (e: Exception) {
@@ -148,7 +151,7 @@ fun MainScreen() {
                             .navigationBarsPadding()
                     ) {
                         // Floating MiniPlayer above Bottom Navigation
-                        if (playbackState.currentTrack != null) {
+                        if (playbackState.currentTrack != null && !isMiniPlayerDismissed) {
                             MiniPlayer(
                                 playbackState = playbackState,
                                 onPlayPauseClick = { audioEngine.togglePlayPause() },
@@ -161,7 +164,8 @@ fun MainScreen() {
                                         }
                                     }
                                 },
-                                onExpandClick = { isPlayerExpanded = true }
+                                onExpandClick = { isPlayerExpanded = true },
+                                onCloseClick = { isMiniPlayerDismissed = true }
                             )
                         }
 
@@ -175,7 +179,7 @@ fun MainScreen() {
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
                                 icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
-                                label = { Text("Home") },
+                                label = { Text("Home", fontSize = 10.sp) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = PureBlack,
                                     selectedTextColor = CyanNeon,
@@ -187,8 +191,21 @@ fun MainScreen() {
                             NavigationBarItem(
                                 selected = selectedTab == 1,
                                 onClick = { selectedTab = 1 },
+                                icon = { Icon(Icons.Default.TravelExplore, contentDescription = "Explore") },
+                                label = { Text("Explore", fontSize = 10.sp) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = PureBlack,
+                                    selectedTextColor = CyanNeon,
+                                    indicatorColor = CyanNeon
+                                ),
+                                modifier = Modifier.testTag("nav_explore_tab")
+                            )
+
+                            NavigationBarItem(
+                                selected = selectedTab == 2,
+                                onClick = { selectedTab = 2 },
                                 icon = { Icon(Icons.Default.LibraryMusic, contentDescription = "Library") },
-                                label = { Text("Library") },
+                                label = { Text("Library", fontSize = 10.sp) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = PureBlack,
                                     selectedTextColor = CyanNeon,
@@ -198,10 +215,23 @@ fun MainScreen() {
                             )
 
                             NavigationBarItem(
-                                selected = selectedTab == 2,
-                                onClick = { selectedTab = 2 },
+                                selected = selectedTab == 3,
+                                onClick = { selectedTab = 3 },
+                                icon = { Icon(Icons.Default.Download, contentDescription = "Downloader") },
+                                label = { Text("Downloader", fontSize = 10.sp) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = PureBlack,
+                                    selectedTextColor = CyanNeon,
+                                    indicatorColor = CyanNeon
+                                ),
+                                modifier = Modifier.testTag("nav_downloader_tab")
+                            )
+
+                            NavigationBarItem(
+                                selected = selectedTab == 4,
+                                onClick = { selectedTab = 4 },
                                 icon = { Icon(Icons.Default.Equalizer, contentDescription = "Equalizer") },
-                                label = { Text("EQ DSP") },
+                                label = { Text("EQ DSP", fontSize = 10.sp) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = PureBlack,
                                     selectedTextColor = CyanNeon,
@@ -211,10 +241,10 @@ fun MainScreen() {
                             )
 
                             NavigationBarItem(
-                                selected = selectedTab == 3,
-                                onClick = { selectedTab = 3 },
+                                selected = selectedTab == 5,
+                                onClick = { selectedTab = 5 },
                                 icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
-                                label = { Text("Profile") },
+                                label = { Text("Profile", fontSize = 10.sp) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = PureBlack,
                                     selectedTextColor = CyanNeon,
@@ -242,12 +272,13 @@ fun MainScreen() {
                         onOnlineTrackClick = { online ->
                             coroutineScope.launch {
                                 try {
+                                    Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
                                     val url = innerTubeRepo.getStreamUrl(online.id)
                                     val track = Track(
                                         id = "yt_${online.id}",
                                         title = online.title,
                                         artist = online.artist,
-                                        album = online.album,
+                                        album = online.album ?: "Online Stream",
                                         durationMs = 210000L,
                                         mediaUri = url,
                                         artworkUri = online.thumbnailUrl,
@@ -260,23 +291,40 @@ fun MainScreen() {
                                 }
                             }
                         },
-                        onProfileClick = { selectedTab = 3 },
-                        onDownloaderClick = { selectedTab = 4 }
+                        onProfileClick = { selectedTab = 5 },
+                        onDownloaderClick = { selectedTab = 3 }
                     )
 
-                    1 -> LibraryScreen(
+                    1 -> ExploreScreen(
+                        innerTubeRepo = innerTubeRepo,
+                        audioEngine = audioEngine,
+                        onDownloadTrack = { online ->
+                            coroutineScope.launch {
+                                try {
+                                    Toast.makeText(context, "Extracting audio: ${online.title}", Toast.LENGTH_SHORT).show()
+                                    val streamUrl = innerTubeRepo.getStreamUrl(online.id)
+                                    downloader.downloadAudioTrack(online, streamUrl)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Download error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    )
+
+                    2 -> LibraryScreen(
                         localTracks = localTracks,
                         searchOnlineResults = searchOnlineResults,
                         onTrackClick = { track -> audioEngine.playTrack(track) },
                         onOnlineTrackClick = { online ->
                             coroutineScope.launch {
                                 try {
+                                    Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
                                     val url = innerTubeRepo.getStreamUrl(online.id)
                                     val track = Track(
                                         id = "yt_${online.id}",
                                         title = online.title,
                                         artist = online.artist,
-                                        album = online.album,
+                                        album = online.album ?: "Online Stream",
                                         durationMs = 210000L,
                                         mediaUri = url,
                                         artworkUri = online.thumbnailUrl,
@@ -326,12 +374,44 @@ fun MainScreen() {
                         }
                     )
 
-                    2 -> EqualizerScreen(
+                    3 -> DownloaderScreen(
+                        downloadEntries = downloadEntries,
+                        searchResults = searchOnlineResults,
+                        onSearchKeyword = { query ->
+                            coroutineScope.launch {
+                                try {
+                                    searchOnlineResults = innerTubeRepo.searchTracks(query)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Search failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        onDownloadTrack = { online ->
+                            coroutineScope.launch {
+                                try {
+                                    Toast.makeText(context, "Extracting audio: ${online.title}", Toast.LENGTH_SHORT).show()
+                                    val streamUrl = innerTubeRepo.getStreamUrl(online.id)
+                                    downloader.downloadAudioTrack(online, streamUrl)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        onStartUrlDownload = { url ->
+                            coroutineScope.launch {
+                                val dummyTrack = InnerTubeTrack("url_dl_${System.currentTimeMillis()}", "Extracted Stream", "Direct Seal", "3:45", "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=300")
+                                downloader.downloadAudioTrack(dummyTrack, url)
+                            }
+                        },
+                        onBackClick = { selectedTab = 0 }
+                    )
+
+                    4 -> EqualizerScreen(
                         audioEngine = audioEngine,
                         onBackClick = { selectedTab = 0 }
                     )
 
-                    3 -> ProfileScreen(
+                    5 -> ProfileScreen(
                         userProfile = userProfile,
                         totalListeningTimeMs = totalTimeMs ?: 0L,
                         totalPlayCount = totalPlayCount,
@@ -364,53 +444,8 @@ fun MainScreen() {
                             }
                         }
                     )
-
-                    4 -> DownloaderScreen(
-                        downloadEntries = downloadEntries,
-                        searchResults = searchOnlineResults,
-                        onSearchKeyword = { query ->
-                            coroutineScope.launch {
-                                try {
-                                    searchOnlineResults = innerTubeRepo.searchTracks(query)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Search failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onDownloadTrack = { online ->
-                            coroutineScope.launch {
-                                try {
-                                    Toast.makeText(context, "Extracting audio: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    val streamUrl = innerTubeRepo.getStreamUrl(online.id)
-                                    downloader.downloadAudioTrack(online, streamUrl)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onStartUrlDownload = { url ->
-                            coroutineScope.launch {
-                                val dummyTrack = InnerTubeTrack("url_dl_${System.currentTimeMillis()}", "Extracted Stream", "Direct Seal", "3:45", "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=300")
-                                downloader.downloadAudioTrack(dummyTrack, url)
-                            }
-                        },
-                        onBackClick = { selectedTab = 0 }
-                    )
                 }
             }
-        }
-
-        // System Dynamic Island Top Floating Pill
-        val visualizerWaveform by audioEngine.visualizerWaveform.collectAsState()
-        if (playbackState.currentTrack != null && !isPlayerExpanded) {
-            DynamicIslandWidget(
-                currentTrack = playbackState.currentTrack,
-                isPlaying = playbackState.isPlaying,
-                waveform = visualizerWaveform,
-                onExpandClick = { isPlayerExpanded = true },
-                onPlayPauseClick = { audioEngine.togglePlayPause() },
-                modifier = Modifier.statusBarsPadding()
-            )
         }
 
         // Full Screen Player Overlay Slide
