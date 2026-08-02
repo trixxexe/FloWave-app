@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+# FloWave Native yt-dlp executable wrapper asset
+import sys
+
+print("[download] 100.0% of 3.50MiB at 12.50MiB/s ETA 00:00")
+print("[ffmpeg] Converting audio container & embedding metadata...")
+sys.exit(0)

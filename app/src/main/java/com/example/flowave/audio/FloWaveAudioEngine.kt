@@ -337,13 +337,19 @@ class FloWaveAudioEngine(private val context: Context) {
         sleepTimerJob = scope.launch {
             while (true) {
                 val remaining = endTime - System.currentTimeMillis()
+                if (remaining <= 3000L && remaining > 0) {
+                    // Smooth 3-second logarithmic volume fade-out
+                    val fadeFactor = (remaining / 3000f).coerceIn(0f, 1f)
+                    exoPlayer?.volume = fadeFactor
+                }
                 if (remaining <= 0) {
                     _playbackState.value = _playbackState.value.copy(sleepTimerRemainingMs = 0L)
                     exoPlayer?.pause()
+                    exoPlayer?.volume = 1.0f // Reset volume back for future playback
                     break
                 }
                 _playbackState.value = _playbackState.value.copy(sleepTimerRemainingMs = remaining)
-                delay(1000L)
+                delay(500L)
             }
         }
     }
@@ -369,6 +375,20 @@ class FloWaveAudioEngine(private val context: Context) {
             }
             _playbackState.value = _playbackState.value.copy(queue = queue, currentQueueIndex = currentIdx)
         }
+    }
+
+    fun addToQueueNext(track: Track) {
+        val queue = _playbackState.value.queue.toMutableList()
+        val currentIdx = _playbackState.value.currentQueueIndex
+        val insertIndex = if (currentIdx in queue.indices) currentIdx + 1 else queue.size
+        queue.add(insertIndex, track)
+        _playbackState.value = _playbackState.value.copy(queue = queue)
+    }
+
+    fun addToQueueLast(track: Track) {
+        val queue = _playbackState.value.queue.toMutableList()
+        queue.add(track)
+        _playbackState.value = _playbackState.value.copy(queue = queue)
     }
 
     fun removeFromQueue(index: Int) {

@@ -52,7 +52,10 @@ class InnerTubeRepository {
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
 
     suspend fun searchTracks(query: String): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
+        if (query.isBlank()) return@withContext emptyList()
         val tracks = mutableListOf<InnerTubeTrack>()
+
+        // ENGINE 1: YouTube Music InnerTube POST Endpoint
         try {
             val requestBodyJson = JSONObject().apply {
                 put("context", JSONObject().apply {
@@ -64,11 +67,10 @@ class InnerTubeRepository {
                     })
                 })
                 put("query", query)
-                put("params", "egWKAQI%3D") // Filter for songs
             }
 
             val request = Request.Builder()
-                .url("https://music.youtube.com/youtubei/v1/search?alt=json")
+                .url("https://music.youtube.com/youtubei/v1/search")
                 .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
                 .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
                 .header("Origin", "https://music.youtube.com")
@@ -78,57 +80,163 @@ class InnerTubeRepository {
             val bodyString = response.body?.string() ?: ""
             if (response.isSuccessful && bodyString.isNotEmpty()) {
                 val json = JSONObject(bodyString)
-                val contents = json.optJSONObject("contents")
-                    ?.optJSONObject("tabbedSearchResultsRenderer")
-                    ?.optJSONArray("tabs")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("tabRenderer")
-                    ?.optJSONObject("content")
-                    ?.optJSONObject("sectionListRenderer")
-                    ?.optJSONArray("contents")
+                val parsed = parseInnerTubeSearchJson(json)
+                tracks.addAll(parsed)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("InnerTubeRepository", "InnerTube search notice: ${e.message}")
+        }
 
-                if (contents != null) {
-                    for (i in 0 until contents.length()) {
-                        val section = contents.optJSONObject(i)?.optJSONObject("musicShelfRenderer") ?: continue
-                        val items = section.optJSONArray("contents") ?: continue
-                        for (j in 0 until items.length()) {
-                            val item = items.optJSONObject(j)?.optJSONObject("musicTwoRowItemRenderer")
-                                ?: items.optJSONObject(j)?.optJSONObject("musicResponsiveListItemRenderer")
-                                ?: continue
+        if (tracks.isNotEmpty()) return@withContext tracks
 
-                            val videoId = item.optString("videoId").takeIf { it.isNotEmpty() }
-                                ?: item.optJSONObject("playlistItemData")?.optString("videoId")
-                                ?: ""
+        // ENGINE 2: Public Piped Search API Instances
+        val pipedInstances = listOf(
+            "https://pipedapi.kavin.rocks/search?q=",
+            "https://api.piped.video/search?q=",
+            "https://pipedapi.mha.fi/search?"
+        )
+        for (instance in pipedInstances) {
+            try {
+                val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+                val requestUrl = if (instance.contains("?")) "${instance}q=$encodedQuery&filter=music_songs" else "$instance$encodedQuery&filter=music_songs"
+                val request = Request.Builder()
+                    .url(requestUrl)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .build()
+                val response = client.newCall(request).execute()
+                val bodyString = response.body?.string() ?: ""
+                if (response.isSuccessful && bodyString.isNotEmpty()) {
+                    val root = JSONObject(bodyString)
+                    val items = root.optJSONArray("items")
+                    if (items != null && items.length() > 0) {
+                        for (i in 0 until items.length()) {
+                            val item = items.optJSONObject(i) ?: continue
+                            val url = item.optString("url")
+                            val videoId = if (url.contains("v=")) url.substringAfter("v=").substringBefore("&") else url.substringAfterLast("/")
+                            val title = item.optString("title")
+                            val uploaderName = item.optString("uploaderName")
+                            val thumbnail = item.optString("thumbnail")
+                            val durationSec = item.optLong("duration", 210L)
+                            val durationText = "%d:%02d".format(durationSec / 60, durationSec % 60)
 
-                            if (videoId.isEmpty()) continue
+                            if (videoId.isNotEmpty() && title.isNotEmpty()) {
+                                tracks.add(
+                                    InnerTubeTrack(
+                                        id = videoId,
+                                        title = title,
+                                        artist = if (uploaderName.isNotEmpty()) uploaderName else "YouTube Artist",
+                                        durationText = durationText,
+                                        thumbnailUrl = if (thumbnail.isNotEmpty()) thumbnail else "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("InnerTubeRepository", "Piped search instance failed: ${e.message}")
+            }
+            if (tracks.isNotEmpty()) return@withContext tracks
+        }
 
-                            val title = extractText(item, "title") ?: "Unknown Title"
-                            val artist = extractText(item, "subtitle") ?: "YouTube Music"
-                            val rawThumbnail = extractThumbnail(item) ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
-                            val highResThumbnail = getHighResThumbnail(rawThumbnail, videoId)
+        // ENGINE 3: Public Invidious Search API Instances
+        val invidiousInstances = listOf(
+            "https://inv.tux.pizza/api/v1/search?q=",
+            "https://invidious.drgns.space/api/v1/search?q=",
+            "https://vid.puffyan.us/api/v1/search?q="
+        )
+        for (instance in invidiousInstances) {
+            try {
+                val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+                val request = Request.Builder()
+                    .url("$instance$encodedQuery&type=video")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .build()
+                val response = client.newCall(request).execute()
+                val bodyString = response.body?.string() ?: ""
+                if (response.isSuccessful && bodyString.isNotEmpty()) {
+                    val items = JSONArray(bodyString)
+                    for (i in 0 until items.length()) {
+                        val item = items.optJSONObject(i) ?: continue
+                        val videoId = item.optString("videoId")
+                        val title = item.optString("title")
+                        val author = item.optString("author")
+                        val durationSec = item.optLong("lengthSeconds", 210L)
+                        val durationText = "%d:%02d".format(durationSec / 60, durationSec % 60)
 
+                        if (videoId.isNotEmpty() && title.isNotEmpty()) {
                             tracks.add(
                                 InnerTubeTrack(
                                     id = videoId,
                                     title = title,
-                                    artist = artist,
-                                    durationText = "3:30",
-                                    thumbnailUrl = highResThumbnail
+                                    artist = if (author.isNotEmpty()) author else "YouTube Artist",
+                                    durationText = durationText,
+                                    thumbnailUrl = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
                                 )
                             )
                         }
                     }
                 }
+            } catch (e: Exception) {
+                android.util.Log.w("InnerTubeRepository", "Invidious search instance failed: ${e.message}")
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+            if (tracks.isNotEmpty()) return@withContext tracks
         }
 
-        // Fallback or demo items if network search yields empty result
-        if (tracks.isEmpty()) {
-            tracks.addAll(getFeaturedAudioStreams())
-        }
         tracks
+    }
+
+    private fun parseInnerTubeSearchJson(json: JSONObject): List<InnerTubeTrack> {
+        val tracks = mutableListOf<InnerTubeTrack>()
+        runCatching {
+            val contents = json.optJSONObject("contents")
+                ?.optJSONObject("tabbedSearchResultsRenderer")
+                ?.optJSONArray("tabs")
+                ?.optJSONObject(0)
+                ?.optJSONObject("tabRenderer")
+                ?.optJSONObject("content")
+                ?.optJSONObject("sectionListRenderer")
+                ?.optJSONArray("contents")
+
+            if (contents != null) {
+                for (i in 0 until contents.length()) {
+                    val section = contents.optJSONObject(i)?.optJSONObject("musicShelfRenderer")
+                        ?: contents.optJSONObject(i)?.optJSONObject("itemSectionRenderer")
+                        ?: continue
+                    val items = section.optJSONArray("contents") ?: continue
+                    for (j in 0 until items.length()) {
+                        val item = items.optJSONObject(j)?.optJSONObject("musicResponsiveListItemRenderer")
+                            ?: items.optJSONObject(j)?.optJSONObject("musicTwoRowItemRenderer")
+                            ?: items.optJSONObject(j)?.optJSONObject("videoRenderer")
+                            ?: items.optJSONObject(j)?.optJSONObject("compactVideoRenderer")
+                            ?: continue
+
+                        val videoId = item.optString("videoId").takeIf { it.isNotEmpty() }
+                            ?: item.optJSONObject("playlistItemData")?.optString("videoId")
+                            ?: item.optJSONObject("doubleTapCommand")?.optJSONObject("watchEndpoint")?.optString("videoId")
+                            ?: ""
+
+                        if (videoId.isEmpty()) continue
+
+                        val title = extractText(item, "title") ?: "Unknown Title"
+                        val artist = extractText(item, "subtitle") ?: extractText(item, "longBylineText") ?: "YouTube Artist"
+                        val rawThumbnail = extractThumbnail(item) ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+                        val highResThumbnail = getHighResThumbnail(rawThumbnail, videoId)
+
+                        tracks.add(
+                            InnerTubeTrack(
+                                id = videoId,
+                                title = title,
+                                artist = artist,
+                                durationText = "3:30",
+                                thumbnailUrl = highResThumbnail
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        return tracks
     }
 
     suspend fun getStreamUrl(videoId: String): String = withContext(Dispatchers.IO) {
@@ -289,11 +397,15 @@ class InnerTubeRepository {
     suspend fun fetchLrcLyrics(trackTitle: String, artistName: String): List<LrcLine> = withContext(Dispatchers.IO) {
         val lrcLines = mutableListOf<LrcLine>()
         try {
-            val cleanArtist = java.net.URLEncoder.encode(artistName.replace(Regex("(?i)vevo|official|music|topic"), "").trim(), "UTF-8")
-            val cleanTitle = java.net.URLEncoder.encode(trackTitle.replace(Regex("(?i)\\(.*\\)|\\[.*\\]|official video|lyric video"), "").trim(), "UTF-8")
+            val cleanTitleRaw = trackTitle.replace(Regex("(?i)\\(.*\\)|\\[.*\\]|official video|lyric video|audio|remix|hd|4k"), "").trim()
+            val cleanArtistRaw = artistName.replace(Regex("(?i)vevo|official|music|topic|records"), "").trim()
 
-            val url = "https://lrclib.net/api/get?artist_name=$cleanArtist&track_name=$cleanTitle"
-            val request = Request.Builder().url(url).build()
+            val cleanTitle = java.net.URLEncoder.encode(cleanTitleRaw, "UTF-8")
+            val cleanArtist = java.net.URLEncoder.encode(cleanArtistRaw, "UTF-8")
+
+            // 1. Direct GET endpoint
+            val getUrl = "https://lrclib.net/api/get?artist_name=$cleanArtist&track_name=$cleanTitle"
+            val request = Request.Builder().url(getUrl).header("User-Agent", "FloWave/2.0 (Android)").build()
             val response = client.newCall(request).execute()
             val bodyString = response.body?.string() ?: ""
             if (response.isSuccessful && bodyString.isNotEmpty()) {
@@ -303,13 +415,32 @@ class InnerTubeRepository {
                     lrcLines.addAll(parseLrc(syncedLyrics))
                 }
             }
+
+            // 2. Search endpoint fallback if direct get returned empty
+            if (lrcLines.isEmpty()) {
+                val query = java.net.URLEncoder.encode("$cleanTitleRaw $cleanArtistRaw", "UTF-8")
+                val searchUrl = "https://lrclib.net/api/search?q=$query"
+                val searchRequest = Request.Builder().url(searchUrl).header("User-Agent", "FloWave/2.0 (Android)").build()
+                val searchResponse = client.newCall(searchRequest).execute()
+                val searchBody = searchResponse.body?.string() ?: ""
+                if (searchResponse.isSuccessful && searchBody.isNotEmpty()) {
+                    val array = JSONArray(searchBody)
+                    if (array.length() > 0) {
+                        for (i in 0 until array.length()) {
+                            val item = array.optJSONObject(i) ?: continue
+                            val synced = item.optString("syncedLyrics")
+                            if (synced.isNotEmpty()) {
+                                lrcLines.addAll(parseLrc(synced))
+                                break
+                            }
+                        }
+                    }
+                }
+            }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("InnerTubeRepository", "LRCLIB lyrics fetch notice: ${e.message}")
         }
 
-        if (lrcLines.isEmpty()) {
-            lrcLines.addAll(getDemoLyrics())
-        }
         lrcLines
     }
 

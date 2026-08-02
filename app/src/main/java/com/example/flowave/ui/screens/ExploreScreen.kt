@@ -44,24 +44,34 @@ fun ExploreScreen(
     val scope = rememberCoroutineScope()
 
     var searchQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("Trending Charts") }
+    var currentActiveQuery by remember { mutableStateOf("") }
     var onlineTracks by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
 
-    val categories = listOf(
-        "Trending Charts",
-        "Bollywood / Indian",
-        "LoFi & Chill",
-        "Synthwave & EDM",
-        "Hip Hop Hits",
-        "Acoustic & Pop"
+    val quickSearchTags = listOf(
+        "Top Songs 2026",
+        "Arijit Singh Hits",
+        "Taylor Swift",
+        "LoFi Beats",
+        "Cyberpunk Synthwave",
+        "Punjabi Banger Hits",
+        "Chill Pop"
     )
 
-    // Initial search load
-    LaunchedEffect(selectedCategory) {
-        isLoading = true
-        onlineTracks = innerTubeRepo.searchTracks(selectedCategory)
-        isLoading = false
+    fun performSearch(query: String) {
+        if (query.isBlank()) return
+        currentActiveQuery = query.trim()
+        scope.launch {
+            isLoading = true
+            try {
+                onlineTracks = innerTubeRepo.searchTracks(currentActiveQuery)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Search error: ${e.message}", Toast.LENGTH_SHORT).show()
+                onlineTracks = emptyList()
+            } finally {
+                isLoading = false
+            }
+        }
     }
 
     Column(
@@ -85,13 +95,13 @@ fun ExploreScreen(
             Spacer(modifier = Modifier.width(10.dp))
             Column {
                 Text(
-                    text = "Online Music Hub",
+                    text = "Live Music Search",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
                 Text(
-                    text = "High-Res Zero-Server InnerTube Extraction",
+                    text = "Instant Zero-Server InnerTube Search Engine",
                     fontSize = 12.sp,
                     color = TextMuted
                 )
@@ -108,13 +118,13 @@ fun ExploreScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
+                    .padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search songs, artists, albums...", color = TextMuted, fontSize = 13.sp) },
+                    placeholder = { Text("Search any song, artist, or album...", color = TextMuted, fontSize = 13.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = CyanNeon) },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
@@ -125,6 +135,14 @@ fun ExploreScreen(
                     },
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = DarkSurface,
+                        unfocusedContainerColor = DarkSurface,
+                        focusedBorderColor = CyanNeon,
+                        unfocusedBorderColor = Color(0x33FFFFFF),
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
                     modifier = Modifier
                         .weight(1f)
                         .testTag("explore_search_input")
@@ -133,40 +151,31 @@ fun ExploreScreen(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 Button(
-                    onClick = {
-                        if (searchQuery.isNotBlank()) {
-                            scope.launch {
-                                isLoading = true
-                                onlineTracks = innerTubeRepo.searchTracks(searchQuery.trim())
-                                isLoading = false
-                            }
-                        } else {
-                            Toast.makeText(context, "Enter search terms", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+                    onClick = { performSearch(searchQuery) },
                     colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
                     shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp)
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)
                 ) {
                     Text("Search", fontWeight = FontWeight.Bold)
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // Category Filter Chips
+        // Quick Search Filter Chips Row
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            items(categories) { category ->
+            items(quickSearchTags) { tag ->
                 FilterChip(
-                    selected = selectedCategory == category,
+                    selected = currentActiveQuery.equals(tag, ignoreCase = true),
                     onClick = {
-                        selectedCategory = category
+                        searchQuery = tag
+                        performSearch(tag)
                     },
-                    label = { Text(category, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                    label = { Text(tag, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = CyanNeon,
                         selectedLabelColor = PureBlack,
@@ -179,18 +188,27 @@ fun ExploreScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Results Section Header
+        // Search Status Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "$selectedCategory (${onlineTracks.size})",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
+            if (currentActiveQuery.isNotEmpty()) {
+                Text(
+                    text = "Results for \"$currentActiveQuery\" (${onlineTracks.size})",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            } else {
+                Text(
+                    text = "Type a song name above or pick a tag",
+                    fontSize = 14.sp,
+                    color = TextMuted
+                )
+            }
+
             if (isLoading) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), color = CyanNeon, strokeWidth = 2.dp)
             }
@@ -198,7 +216,7 @@ fun ExploreScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Online Songs List
+        // Online Search Results List
         if (onlineTracks.isEmpty() && !isLoading) {
             GlassCard(
                 modifier = Modifier.fillMaxWidth(),
@@ -207,10 +225,18 @@ fun ExploreScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(30.dp),
+                        .padding(32.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("No online tracks found. Try another search query.", color = TextMuted)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = TextMuted, modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = if (currentActiveQuery.isEmpty()) "Search millions of online tracks instantly" else "No online tracks found for \"$currentActiveQuery\"",
+                            color = TextMuted,
+                            fontSize = 13.sp
+                        )
+                    }
                 }
             }
         } else {
@@ -224,17 +250,18 @@ fun ExploreScreen(
                             .fillMaxWidth()
                             .clickable {
                                 scope.launch {
-                                    Toast.makeText(context, "Resolving stream: ${item.title}...", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Resolving stream for ${item.title}...", Toast.LENGTH_SHORT).show()
                                     val streamUrl = innerTubeRepo.getStreamUrl(item.id)
                                     val track = Track(
-                                        id = item.id,
+                                        id = "yt_${item.id}",
                                         title = item.title,
                                         artist = item.artist,
-                                        album = item.album,
+                                        album = item.album ?: "YouTube Music",
                                         durationMs = 210000L,
                                         mediaUri = streamUrl,
                                         artworkUri = item.thumbnailUrl,
-                                        isOnline = true
+                                        isOnline = true,
+                                        source = "YOUTUBE"
                                     )
                                     audioEngine.playTrack(track)
                                 }
@@ -247,14 +274,13 @@ fun ExploreScreen(
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Thumbnail with play overlay
                             Box(contentAlignment = Alignment.Center) {
                                 AsyncImage(
                                     model = item.thumbnailUrl,
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
-                                        .size(52.dp)
+                                        .size(54.dp)
                                         .clip(RoundedCornerShape(10.dp))
                                         .background(DarkSurface)
                                 )
@@ -276,7 +302,6 @@ fun ExploreScreen(
 
                             Spacer(modifier = Modifier.width(12.dp))
 
-                            // Details
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = item.title,
@@ -297,11 +322,10 @@ fun ExploreScreen(
 
                             Spacer(modifier = Modifier.width(8.dp))
 
-                            // Download Icon
                             IconButton(
                                 onClick = {
                                     onDownloadTrack(item)
-                                    Toast.makeText(context, "Sent to downloader: ${item.title}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Extracting audio: ${item.title}", Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier
                                     .clip(CircleShape)
