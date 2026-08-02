@@ -188,7 +188,9 @@ class SealStyleDownloadEngine(private val envManager: FloWaveNativeEnvManager) {
                 val response = httpClient.newCall(request).execute()
                 val body = response.body
                 if (response.isSuccessful && body != null) {
-                    val outputFile = File(outputDirectory, "flowave_download_${System.currentTimeMillis()}.mp3")
+                    val contentType = response.header("Content-Type") ?: ""
+                    val ext = getExtensionFromMime(contentType, targetUrl)
+                    val outputFile = File(outputDirectory, "flowave_download_${System.currentTimeMillis()}.$ext")
                     val inputStream = body.byteStream()
                     val outputStream = FileOutputStream(outputFile)
                     val totalBytes = body.contentLength()
@@ -220,6 +222,48 @@ class SealStyleDownloadEngine(private val envManager: FloWaveNativeEnvManager) {
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun getExtensionFromMime(contentType: String, url: String): String {
+        if (contentType.isNotEmpty()) {
+            val lower = contentType.lowercase()
+            when {
+                lower.contains("audio/mpeg") || lower.contains("audio/mp3") -> return "mp3"
+                lower.contains("audio/ogg") || lower.contains("audio/opus") || lower.contains("ogg") -> return "opus"
+                lower.contains("audio/webm") || lower.contains("video/webm") -> return "webm"
+                lower.contains("audio/mp4") || lower.contains("audio/m4a") || lower.contains("video/mp4") -> return "m4a"
+                lower.contains("audio/flac") -> return "flac"
+                lower.contains("audio/wav") || lower.contains("audio/x-wav") -> return "wav"
+                lower.contains("audio/aac") || lower.contains("audio/x-aac") -> return "aac"
+            }
+        }
+
+        val decodedUrl = try {
+            java.net.URLDecoder.decode(url, "UTF-8")
+        } catch (e: Exception) {
+            url
+        }
+
+        val mimeRegex = Regex("[?&]mime=([^&]+)")
+        val match = mimeRegex.find(decodedUrl)
+        if (match != null) {
+            val mimeType = match.groupValues[1].lowercase()
+            when {
+                mimeType.contains("audio/mpeg") || mimeType.contains("audio/mp3") -> return "mp3"
+                mimeType.contains("audio/ogg") || mimeType.contains("audio/opus") || mimeType.contains("ogg") -> return "opus"
+                mimeType.contains("audio/webm") || mimeType.contains("video/webm") -> return "webm"
+                mimeType.contains("audio/mp4") || mimeType.contains("audio/m4a") || mimeType.contains("video/mp4") -> return "m4a"
+                mimeType.contains("audio/flac") -> return "flac"
+                mimeType.contains("audio/wav") || mimeType.contains("audio/x-wav") -> return "wav"
+                mimeType.contains("audio/aac") || mimeType.contains("audio/x-aac") -> return "aac"
+            }
+        }
+
+        val pathExtension = android.webkit.MimeTypeMap.getFileExtensionFromUrl(url)
+        if (!pathExtension.isNullOrEmpty()) {
+            return pathExtension.lowercase()
+        }
+        return "webm"
+    }
 }
 
 // ============================================================================
@@ -285,12 +329,14 @@ class FloWaveDownloadService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "FloWave Native Downloader",
-            NotificationManager.IMPORTANCE_LOW
-        )
-        getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "FloWave Native Downloader",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        }
     }
 
     private fun buildNotification(text: String, progress: Int = 0): Notification {

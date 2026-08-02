@@ -46,7 +46,7 @@ fun MainScreen() {
 
     val repository = remember { FloWaveRepository(context) }
     val profileRepo = remember { ProfileRepository(context) }
-    val audioEngine = remember { FloWaveAudioEngine(context) }
+    val audioEngine = remember { FloWaveAudioEngine.getInstance(context) }
     val innerTubeRepo = remember { InnerTubeRepository() }
     val downloader = remember { FloWaveDownloader(context, repository) }
 
@@ -399,7 +399,7 @@ fun MainScreen() {
                         },
                         onStartUrlDownload = { url ->
                             coroutineScope.launch {
-                                val dummyTrack = InnerTubeTrack("url_dl_${System.currentTimeMillis()}", "Extracted Stream", "Direct Seal", "3:45", "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=300")
+                                val dummyTrack = InnerTubeTrack("url_dl_${System.currentTimeMillis()}", "Extracted Stream", "Direct FloWave", "3:45", "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=300")
                                 downloader.downloadAudioTrack(dummyTrack, url)
                             }
                         },

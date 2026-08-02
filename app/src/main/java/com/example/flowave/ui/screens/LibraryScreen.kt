@@ -152,7 +152,7 @@ fun LibraryScreen(
                         }
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(filtered) { track ->
+                            items(filtered, key = { it.id }) { track ->
                                 TrackListItem(
                                     track = track,
                                     onTrackClick = { onTrackClick(track) },
@@ -173,7 +173,7 @@ fun LibraryScreen(
                         }
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(folderGroups.keys.toList()) { folderPath ->
+                            items(folderGroups.keys.toList(), key = { it }) { folderPath ->
                                 val folderTracks = folderGroups[folderPath] ?: emptyList()
                                 GlassCard(
                                     modifier = Modifier.fillMaxWidth().clickable {
@@ -206,7 +206,7 @@ fun LibraryScreen(
                         }
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(searchOnlineResults) { onlineTrack ->
+                            items(searchOnlineResults, key = { it.id }) { onlineTrack ->
                                 OnlineTrackListItem(
                                     track = onlineTrack,
                                     onTrackClick = { onOnlineTrackClick(onlineTrack) },
@@ -225,7 +225,7 @@ fun LibraryScreen(
                         }
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(favorites) { track ->
+                            items(favorites, key = { it.id }) { track ->
                                 TrackListItem(
                                     track = track,
                                     onTrackClick = { onTrackClick(track) },

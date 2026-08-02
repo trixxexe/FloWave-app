@@ -364,7 +364,7 @@ fun ProfileScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    "High-resolution audio player with native InnerTube YouTube extraction, Seal client downloader, 10-band parametric EQ, synced LRC lyrics display, and Room offline database integration.",
+                    "High-resolution audio player with native InnerTube YouTube extraction, FloWave client downloader, 10-band parametric EQ, synced LRC lyrics display, and Room offline database integration.",
                     color = TextPrimary.copy(alpha = 0.85f),
                     fontSize = 12.sp,
                     lineHeight = 17.sp

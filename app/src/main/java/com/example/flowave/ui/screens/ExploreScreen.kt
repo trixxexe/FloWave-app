@@ -244,7 +244,7 @@ fun ExploreScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(onlineTracks) { item ->
+                items(onlineTracks, key = { it.id }) { item ->
                     GlassCard(
                         modifier = Modifier
                             .fillMaxWidth()

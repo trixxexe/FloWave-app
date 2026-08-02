@@ -63,7 +63,7 @@ fun DownloaderScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Icon(Icons.Default.Download, contentDescription = null, tint = CyanNeon)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Seal High-Res Audio Downloader", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            Text("FloWave High-Res Audio Downloader", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -231,7 +231,7 @@ fun DownloaderScreen(
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(searchResults) { track ->
+                items(searchResults, key = { it.id }) { track ->
                     GlassCard(
                         modifier = Modifier.fillMaxWidth(),
                         cornerRadius = 14.dp
