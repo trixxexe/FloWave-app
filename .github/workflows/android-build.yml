@@ -34,15 +34,25 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
+      # AGP 9.1.1 requires Gradle 9.3.1
+      - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
 
-      - name: Ensure Gradle Wrapper & Permissions
+      - name: Install Android SDK components (API 36 / build-tools 36.0.0)
         run: |
-          if [ ! -f ./gradlew ]; then
-            gradle wrapper --gradle-version 8.7
-          fi
-          chmod +x gradlew
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" || true
+
+      - name: Ensure Gradle wrapper is on 9.3.1
+        run: |
+          gradle wrapper --gradle-version 9.3.1
+          chmod +x ./gradlew
 
       - name: Create default .env file
         run: |
@@ -50,7 +60,7 @@ jobs:
             cp .env.example .env || touch .env
           fi
 
-      - name: Generate debug keystore if missing
+      - name: Generate debug keystore at repo root if missing
         run: |
           if [ ! -f "./debug.keystore" ]; then
             keytool -genkey -v -keystore ./debug.keystore \
