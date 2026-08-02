@@ -98,9 +98,9 @@ class FloWaveAudioEngine(private val context: Context) {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
-        val cacheDataSourceFactory = FloWaveCacheManager.createCacheDataSourceFactory(context)
+        val customDataSourceFactory = FloWaveDataSourceFactory(context)
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
-            .setDataSourceFactory(cacheDataSourceFactory)
+            .setDataSourceFactory(customDataSourceFactory)
 
         exoPlayer = ExoPlayer.Builder(context)
             .setAudioAttributes(audioAttributes, true)
@@ -212,8 +212,13 @@ class FloWaveAudioEngine(private val context: Context) {
 
             val uriStr = track.mediaUri
             if (!uriStr.isNullOrEmpty()) {
+                val parsedUri = if (uriStr.startsWith("/") || !uriStr.contains("://")) {
+                    Uri.fromFile(java.io.File(uriStr))
+                } else {
+                    Uri.parse(uriStr)
+                }
                 MediaItem.Builder()
-                    .setUri(Uri.parse(uriStr))
+                    .setUri(parsedUri)
                     .setMediaId(track.id)
                     .setMediaMetadata(metadataBuilder.build())
                     .build()

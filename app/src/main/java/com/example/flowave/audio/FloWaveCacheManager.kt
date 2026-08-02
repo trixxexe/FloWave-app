@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
@@ -30,7 +31,7 @@ object FloWaveCacheManager {
 
     @Synchronized
     fun createCacheDataSourceFactory(context: Context): CacheDataSource.Factory {
-        val upstreamFactory = DefaultHttpDataSource.Factory()
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
             .setDefaultRequestProperties(
@@ -39,6 +40,8 @@ object FloWaveCacheManager {
                     "Origin" to "https://www.youtube.com"
                 )
             )
+
+        val upstreamFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
         return CacheDataSource.Factory()
             .setCache(getCache(context))

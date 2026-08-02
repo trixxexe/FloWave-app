@@ -231,7 +231,7 @@ fun DownloaderScreen(
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(searchResults, key = { it.id }) { track ->
+                items(searchResults) { track ->
                     GlassCard(
                         modifier = Modifier.fillMaxWidth(),
                         cornerRadius = 14.dp

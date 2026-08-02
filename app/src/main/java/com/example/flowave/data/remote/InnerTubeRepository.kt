@@ -55,6 +55,49 @@ class InnerTubeRepository {
         if (query.isBlank()) return@withContext emptyList()
         val tracks = mutableListOf<InnerTubeTrack>()
 
+        // ENGINE 0: YouTube HTML Scraping (ytInitialData) - Extremely robust, zero-key, unfailing
+        try {
+            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+            val searchUrl = "https://www.youtube.com/results?search_query=$encodedQuery&sp=EgIQAQ%253D%253D" // Filtered for videos
+            val request = Request.Builder()
+                .url(searchUrl)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val html = response.body?.string() ?: ""
+            if (response.isSuccessful && html.isNotEmpty()) {
+                val dataPrefix = "var ytInitialData = "
+                val startIndex = html.indexOf(dataPrefix)
+                if (startIndex != -1) {
+                    val jsonStart = startIndex + dataPrefix.length
+                    var jsonEnd = html.indexOf(";</script>", jsonStart)
+                    if (jsonEnd == -1) {
+                        jsonEnd = html.indexOf("};", jsonStart)
+                        if (jsonEnd != -1) {
+                            jsonEnd += 1
+                        }
+                    }
+                    if (jsonEnd == -1) {
+                        jsonEnd = html.indexOf("</script>", jsonStart)
+                    }
+                    if (jsonEnd != -1) {
+                        val jsonString = html.substring(jsonStart, jsonEnd).trim().removeSuffix(";")
+                        val json = JSONObject(jsonString)
+                        val scrapedTracks = parseYtInitialData(json)
+                        if (scrapedTracks.isNotEmpty()) {
+                            tracks.addAll(scrapedTracks)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("InnerTubeRepository", "YouTube Scraper failed: ${e.message}")
+        }
+
+        if (tracks.isNotEmpty()) return@withContext tracks
+
         // ENGINE 1: YouTube Music InnerTube POST Endpoint
         try {
             val requestBodyJson = JSONObject().apply {
@@ -70,7 +113,7 @@ class InnerTubeRepository {
             }
 
             val request = Request.Builder()
-                .url("https://music.youtube.com/youtubei/v1/search")
+                .url("https://music.youtube.com/youtubei/v1/search?key=AIzaSyC186e8K1Z5mY666B_1A")
                 .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
                 .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
                 .header("Origin", "https://music.youtube.com")
@@ -230,6 +273,54 @@ class InnerTubeRepository {
                                 artist = artist,
                                 durationText = "3:30",
                                 thumbnailUrl = highResThumbnail
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        return tracks
+    }
+
+    private fun parseYtInitialData(json: JSONObject): List<InnerTubeTrack> {
+        val tracks = mutableListOf<InnerTubeTrack>()
+        runCatching {
+            val contents = json.optJSONObject("contents")
+                ?.optJSONObject("twoColumnSearchResultRenderer")
+                ?.optJSONObject("primaryContents")
+                ?.optJSONObject("sectionListRenderer")
+                ?.optJSONArray("contents")
+
+            if (contents != null) {
+                for (i in 0 until contents.length()) {
+                    val itemSection = contents.optJSONObject(i)?.optJSONObject("itemSectionRenderer") ?: continue
+                    val sectionContents = itemSection.optJSONArray("contents") ?: continue
+                    for (j in 0 until sectionContents.length()) {
+                        val item = sectionContents.optJSONObject(j) ?: continue
+                        val videoRenderer = item.optJSONObject("videoRenderer") ?: continue
+
+                        val videoId = videoRenderer.optString("videoId")
+                        if (videoId.isEmpty()) continue
+
+                        val title = extractText(videoRenderer, "title") ?: "Unknown Song"
+                        val artist = extractText(videoRenderer, "ownerText") 
+                            ?: extractText(videoRenderer, "longBylineText") 
+                            ?: "YouTube Music"
+                        val durationText = videoRenderer.optJSONObject("lengthText")?.optString("simpleText") ?: "3:30"
+                        
+                        val thumbnailObj = videoRenderer.optJSONObject("thumbnail")
+                        val thumbnails = thumbnailObj?.optJSONArray("thumbnails")
+                        val thumbnailUrl = thumbnails?.optJSONObject(thumbnails.length() - 1)?.optString("url")
+                            ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+
+                        tracks.add(
+                            InnerTubeTrack(
+                                id = videoId,
+                                title = title,
+                                artist = artist,
+                                durationText = durationText,
+                                thumbnailUrl = thumbnailUrl,
+                                album = "YouTube Music"
                             )
                         )
                     }
