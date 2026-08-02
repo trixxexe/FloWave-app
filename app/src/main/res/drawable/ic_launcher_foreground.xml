@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M24,54 C24,40 32,32 54,32 C76,32 84,40 84,54 C84,68 76,76 54,76 C32,76 24,68 24,54 Z"
+        android:strokeWidth="3.5">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="24"
+                android:startY="32"
+                android:endX="84"
+                android:endY="76"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF00F2FE" />
+                <item android:offset="1.0" android:color="#FF4FACFE" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Audio equalizer wave bars in center -->
+    <path
+        android:pathData="M38,58 L38,50 M46,64 L46,44 M54,68 L54,40 M62,62 L62,46 M70,56 L70,52"
+        android:strokeWidth="4"
+        android:strokeLineCap="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="38"
+                android:startY="40"
+                android:endX="70"
+                android:endY="68"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF00F2FE" />
+                <item android:offset="0.5" android:color="#FF00C6FF" />
+                <item android:offset="1.0" android:color="#FF0072FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

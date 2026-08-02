@@ -1,0 +1,6 @@
+{
+  "name": "FloWave",
+  "description": "Ultra-fidelity zero-server Android Music Application with local audio playback, YouTube Music streaming, audio downloader, DSP equalizer, and real-time visualizers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
