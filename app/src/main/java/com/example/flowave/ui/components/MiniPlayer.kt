@@ -1,5 +1,6 @@
 package com.example.flowave.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -8,11 +9,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,6 +31,7 @@ import com.example.flowave.ui.theme.CyanNeon
 import com.example.flowave.ui.theme.TextMuted
 import com.example.flowave.ui.theme.TextPrimary
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MiniPlayer(
     playbackState: PlaybackState,
@@ -37,6 +40,7 @@ fun MiniPlayer(
     onFavoriteClick: () -> Unit,
     onExpandClick: () -> Unit,
     onCloseClick: () -> Unit,
+    onSeek: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val track = playbackState.currentTrack ?: return
@@ -57,14 +61,31 @@ fun MiniPlayer(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Artwork
-                AsyncImage(
-                    model = track.artworkUri ?: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=200",
-                    contentDescription = "Track Artwork",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                )
+                if (!track.artworkUri.isNullOrEmpty()) {
+                    AsyncImage(
+                        model = track.artworkUri,
+                        contentDescription = "Track Artwork",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF1E2830)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = "No Artwork",
+                            tint = CyanNeon,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.width(10.dp))
 
@@ -151,14 +172,44 @@ fun MiniPlayer(
 
             // Sleek Progress Line
             if (playbackState.durationMs > 0) {
-                val progress = (playbackState.currentPositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
-                LinearProgressIndicator(
-                    progress = { progress },
+                val posMs = playbackState.currentPositionMs
+                val durMs = playbackState.durationMs.coerceAtLeast(1L)
+                var sliderPos by remember { mutableFloatStateOf(0f) }
+                var isUserSeeking by remember { mutableStateOf(false) }
+
+                val currentProgress = if (isUserSeeking) sliderPos else (posMs.toFloat() / durMs.toFloat()).coerceIn(0f, 1f)
+
+                Slider(
+                    value = currentProgress,
+                    onValueChange = {
+                        isUserSeeking = true
+                        sliderPos = it
+                    },
+                    onValueChangeFinished = {
+                        isUserSeeking = false
+                        onSeek((sliderPos * durMs).toLong())
+                    },
+                    colors = SliderDefaults.colors(
+                        thumbColor = CyanNeon,
+                        activeTrackColor = CyanNeon,
+                        inactiveTrackColor = Color(0x22FFFFFF)
+                    ),
+                    thumb = {
+                        if (isUserSeeking) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(CyanNeon)
+                            )
+                        } else {
+                            Box(modifier = Modifier.size(0.dp))
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(2.dp),
-                    color = CyanNeon,
-                    trackColor = Color(0x22FFFFFF)
+                        .height(10.dp)
+                        .testTag("mini_player_seekbar")
                 )
             }
         }

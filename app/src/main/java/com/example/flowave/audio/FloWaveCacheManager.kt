@@ -48,4 +48,14 @@ object FloWaveCacheManager {
             .setUpstreamDataSourceFactory(upstreamFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
+
+    @Synchronized
+    fun releaseCache() {
+        try {
+            cacheInstance?.release()
+            cacheInstance = null
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveCacheManager", "Failed to release SimpleCache", e)
+        }
+    }
 }

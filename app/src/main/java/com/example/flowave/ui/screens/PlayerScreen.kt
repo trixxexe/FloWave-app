@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.flowave.audio.FloWaveAudioEngine
 import com.example.flowave.data.model.LrcLine
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.flowave.ui.components.CanvasVisualizer
 import com.example.flowave.ui.components.DynamicAudioDeviceSelectorPill
 import com.example.flowave.ui.components.GlassCard
@@ -41,8 +42,8 @@ fun PlayerScreen(
     onOpenEqualizerClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val playbackState by audioEngine.playbackState.collectAsState()
-    val visualizerWaveform by audioEngine.visualizerWaveform.collectAsState()
+    val playbackState by audioEngine.playbackState.collectAsStateWithLifecycle()
+    val visualizerWaveform by audioEngine.visualizerWaveform.collectAsStateWithLifecycle()
     val track = playbackState.currentTrack
 
     var activeTab by remember { mutableStateOf(0) } // 0: Player, 1: Karaoke Lyrics, 2: Queue

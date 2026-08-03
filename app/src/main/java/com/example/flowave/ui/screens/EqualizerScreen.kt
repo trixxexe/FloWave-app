@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.example.flowave.audio.FloWaveAudioEngine
 import com.example.flowave.ui.components.GlassCard
 import com.example.flowave.ui.theme.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun EqualizerScreen(
@@ -30,7 +31,7 @@ fun EqualizerScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val eqState by audioEngine.equalizerState.collectAsState()
+    val eqState by audioEngine.equalizerState.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
 
     val presets = listOf("Flat", "Bass Boost", "Electronic", "Rock", "Pop", "Jazz", "Vocal")

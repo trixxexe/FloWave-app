@@ -37,7 +37,9 @@ import com.example.flowave.ui.components.PermissionsDialog
 import com.example.flowave.ui.components.TagEditorDialog
 import com.example.flowave.ui.screens.*
 import com.example.flowave.ui.theme.*
+import com.example.flowave.utils.SettingsSchema
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun MainScreen() {
@@ -50,11 +52,12 @@ fun MainScreen() {
     val innerTubeRepo = remember { InnerTubeRepository() }
     val downloader = remember { FloWaveDownloader(context, repository) }
 
-    val localTracks by repository.allTracks.collectAsState(initial = emptyList())
-    val totalTimeMs by repository.totalListeningTimeMs.collectAsState(initial = 0L)
-    val totalPlayCount by repository.totalPlayCount.collectAsState(initial = 0)
-    val downloadEntries by downloader.allDownloadEntries.collectAsState(initial = emptyList())
-    val userProfile by profileRepo.userProfile.collectAsState(initial = UserProfile())
+    val localTracks by repository.allTracks.collectAsStateWithLifecycle(initialValue = emptyList())
+    val totalTimeMs by repository.totalListeningTimeMs.collectAsStateWithLifecycle(initialValue = 0L)
+    val totalPlayCount by repository.totalPlayCount.collectAsStateWithLifecycle(initialValue = 0)
+    val downloadEntries by downloader.allDownloadEntries.collectAsStateWithLifecycle(initialValue = emptyList())
+    val userProfile by profileRepo.userProfile.collectAsStateWithLifecycle(initialValue = UserProfile())
+    val settingsJson by profileRepo.settingsJson.collectAsStateWithLifecycle(initialValue = SettingsSchema.getDefaultJson())
 
     var featuredOnlineTracks by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var searchOnlineResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
@@ -65,8 +68,11 @@ fun MainScreen() {
     var isMiniPlayerDismissed by remember { mutableStateOf(false) }
     var editingTrack by remember { mutableStateOf<Track?>(null) }
     var lastBackPressedTime by remember { mutableLongStateOf(0L) }
+    var activeTrackForStats by remember { mutableStateOf<Track?>(null) }
+    var lastPositionMs by remember { mutableLongStateOf(0L) }
+    var accumulatedTimeMs by remember { mutableLongStateOf(0L) }
 
-    val playbackState by audioEngine.playbackState.collectAsState()
+    val playbackState by audioEngine.playbackState.collectAsStateWithLifecycle()
 
     // BackHandler: Single tap as redirector to previous page, Double tap on Home to exit app
     BackHandler(enabled = true) {
@@ -95,18 +101,54 @@ fun MainScreen() {
         repository.scanMediaStore()
     }
 
-    // Fetch lyrics & update streak when track changes
-    LaunchedEffect(playbackState.currentTrack) {
-        val track = playbackState.currentTrack
-        if (track != null) {
+    val currentTrack = playbackState.currentTrack
+    val currentPosition = playbackState.currentPositionMs
+    val isPlaying = playbackState.isPlaying
+
+    // Track active listening duration
+    LaunchedEffect(currentTrack) {
+        val prevTrack = activeTrackForStats
+        if (prevTrack != null && accumulatedTimeMs > 0L) {
+            val statsToRecord = accumulatedTimeMs
+            coroutineScope.launch {
+                repository.recordPlay(prevTrack, statsToRecord)
+            }
+        }
+        activeTrackForStats = currentTrack
+        accumulatedTimeMs = 0L
+        lastPositionMs = currentPosition
+        
+        if (currentTrack != null) {
             isMiniPlayerDismissed = false // Reset mini player visibility on track change
             try {
-                currentLrcLines = innerTubeRepo.fetchLrcLyrics(track.title, track.artist)
+                currentLrcLines = innerTubeRepo.fetchLrcLyrics(currentTrack.title, currentTrack.artist)
             } catch (e: Exception) {
                 currentLrcLines = emptyList()
             }
-            repository.recordPlay(track, 30000L)
             profileRepo.recordDailyListeningStreak()
+        }
+    }
+
+    LaunchedEffect(currentPosition, isPlaying) {
+        val track = activeTrackForStats
+        if (track != null && isPlaying) {
+            val delta = currentPosition - lastPositionMs
+            if (delta in 1..5000) {
+                accumulatedTimeMs += delta
+            }
+        }
+        lastPositionMs = currentPosition
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            val finalTrack = activeTrackForStats
+            val finalTime = accumulatedTimeMs
+            if (finalTrack != null && finalTime > 0L) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    repository.recordPlay(finalTrack, finalTime)
+                }
+            }
         }
     }
 
@@ -165,7 +207,8 @@ fun MainScreen() {
                                     }
                                 },
                                 onExpandClick = { isPlayerExpanded = true },
-                                onCloseClick = { isMiniPlayerDismissed = true }
+                                onCloseClick = { isMiniPlayerDismissed = true },
+                                onSeek = { pos -> audioEngine.seekTo(pos) }
                             )
                         }
 
@@ -274,12 +317,14 @@ fun MainScreen() {
                                 try {
                                     Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
                                     val url = innerTubeRepo.getStreamUrl(online.id)
+                                    val cachedDuration = innerTubeRepo.getCachedDuration(online.id)
+                                    val finalDuration = if (cachedDuration > 0L) cachedDuration else innerTubeRepo.parseDurationText(online.durationText)
                                     val track = Track(
                                         id = "yt_${online.id}",
                                         title = online.title,
                                         artist = online.artist,
-                                        album = online.album ?: "Online Stream",
-                                        durationMs = 210000L,
+                                        album = if (online.album.isNotEmpty()) online.album else "Online Stream",
+                                        durationMs = finalDuration,
                                         mediaUri = url,
                                         artworkUri = online.thumbnailUrl,
                                         isOnline = true,
@@ -292,7 +337,8 @@ fun MainScreen() {
                             }
                         },
                         onProfileClick = { selectedTab = 5 },
-                        onDownloaderClick = { selectedTab = 3 }
+                        onDownloaderClick = { selectedTab = 3 },
+                        settingsJson = settingsJson
                     )
 
                     1 -> ExploreScreen(
@@ -320,12 +366,14 @@ fun MainScreen() {
                                 try {
                                     Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
                                     val url = innerTubeRepo.getStreamUrl(online.id)
+                                    val cachedDuration = innerTubeRepo.getCachedDuration(online.id)
+                                    val finalDuration = if (cachedDuration > 0L) cachedDuration else innerTubeRepo.parseDurationText(online.durationText)
                                     val track = Track(
                                         id = "yt_${online.id}",
                                         title = online.title,
                                         artist = online.artist,
-                                        album = online.album ?: "Online Stream",
-                                        durationMs = 210000L,
+                                        album = if (online.album.isNotEmpty()) online.album else "Online Stream",
+                                        durationMs = finalDuration,
                                         mediaUri = url,
                                         artworkUri = online.thumbnailUrl,
                                         isOnline = true,
@@ -366,6 +414,9 @@ fun MainScreen() {
                             }
                         },
                         onEditTagClick = { track -> editingTrack = track },
+                        onPlayQueue = { queue, idx -> audioEngine.setQueueAndPlay(queue, idx) },
+                        onAddToQueueNext = { track -> audioEngine.addToQueueNext(track) },
+                        onAddToQueueLast = { track -> audioEngine.addToQueueLast(track) },
                         onToggleFavoriteClick = { track ->
                             coroutineScope.launch {
                                 repository.toggleFavorite(track)
@@ -399,7 +450,7 @@ fun MainScreen() {
                         },
                         onStartUrlDownload = { url ->
                             coroutineScope.launch {
-                                val dummyTrack = InnerTubeTrack("url_dl_${System.currentTimeMillis()}", "Extracted Stream", "Direct FloWave", "3:45", "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=300")
+                                val dummyTrack = InnerTubeTrack("url_dl_${System.currentTimeMillis()}", "Extracted Stream", "Direct FloWave", "3:45", "")
                                 downloader.downloadAudioTrack(dummyTrack, url)
                             }
                         },
@@ -411,7 +462,7 @@ fun MainScreen() {
                         onBackClick = { selectedTab = 0 }
                     )
 
-                    5 -> ProfileScreen(
+                     5 -> ProfileScreen(
                         userProfile = userProfile,
                         totalListeningTimeMs = totalTimeMs ?: 0L,
                         totalPlayCount = totalPlayCount,
@@ -442,6 +493,18 @@ fun MainScreen() {
                                 profileRepo.updateAudioSettings(norm, gapless)
                                 Toast.makeText(context, "Audio engine DSP settings saved", Toast.LENGTH_SHORT).show()
                             }
+                        },
+                        settingsJson = settingsJson,
+                        onSettingUpdated = { key, value ->
+                            coroutineScope.launch {
+                                profileRepo.updateSetting(key, value)
+                            }
+                        },
+                        onExportSettings = {
+                            profileRepo.exportSettings()
+                        },
+                        onImportSettings = { jsonStr ->
+                            profileRepo.importSettings(jsonStr)
                         }
                     )
                 }
@@ -460,7 +523,7 @@ fun MainScreen() {
                 onCloseClick = { isPlayerExpanded = false },
                 onOpenEqualizerClick = {
                     isPlayerExpanded = false
-                    selectedTab = 2
+                    selectedTab = 4
                 }
             )
         }

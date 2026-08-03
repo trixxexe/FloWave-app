@@ -185,37 +185,37 @@ class SealStyleDownloadEngine(private val envManager: FloWaveNativeEnvManager) {
             runCatching {
                 emit(DownloadState.Downloading(10f, "HTTP Stream", "Calculating..."))
                 val request = Request.Builder().url(targetUrl).build()
-                val response = httpClient.newCall(request).execute()
-                val body = response.body
-                if (response.isSuccessful && body != null) {
-                    val contentType = response.header("Content-Type") ?: ""
-                    val ext = getExtensionFromMime(contentType, targetUrl)
-                    val outputFile = File(outputDirectory, "flowave_download_${System.currentTimeMillis()}.$ext")
-                    val inputStream = body.byteStream()
-                    val outputStream = FileOutputStream(outputFile)
-                    val totalBytes = body.contentLength()
-                    val buffer = ByteArray(16 * 1024)
-                    var bytesRead: Int
-                    var downloadedBytes = 0L
+                httpClient.newCall(request).execute().use { response ->
+                    val body = response.body
+                    if (response.isSuccessful && body != null) {
+                        val contentType = response.header("Content-Type") ?: ""
+                        val ext = getExtensionFromMime(contentType, targetUrl)
+                        val outputFile = File(outputDirectory, "flowave_download_${System.currentTimeMillis()}.$ext")
+                        body.byteStream().use { inputStream ->
+                            FileOutputStream(outputFile).use { outputStream ->
+                                val totalBytes = body.contentLength()
+                                val buffer = ByteArray(16 * 1024)
+                                var bytesRead: Int
+                                var downloadedBytes = 0L
 
-                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        outputStream.write(buffer, 0, bytesRead)
-                        downloadedBytes += bytesRead
-                        if (totalBytes > 0) {
-                            val pct = (downloadedBytes.toFloat() / totalBytes.toFloat()) * 100f
-                            val speedKb = "1.2 MB/s"
-                            emit(DownloadState.Downloading(pct, speedKb, "10s"))
+                                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                                    outputStream.write(buffer, 0, bytesRead)
+                                    downloadedBytes += bytesRead
+                                    if (totalBytes > 0) {
+                                        val pct = (downloadedBytes.toFloat() / totalBytes.toFloat()) * 100f
+                                        val speedKb = "1.2 MB/s"
+                                        emit(DownloadState.Downloading(pct, speedKb, "10s"))
+                                    }
+                                }
+                                outputStream.flush()
+                            }
                         }
+
+                        emit(DownloadState.PostProcessing("Finalizing saved media file..."))
+                        emit(DownloadState.Success(outputFile.absolutePath))
+                    } else {
+                        emit(DownloadState.Error("HTTP download failed with code ${response.code}"))
                     }
-
-                    outputStream.flush()
-                    outputStream.close()
-                    inputStream.close()
-
-                    emit(DownloadState.PostProcessing("Finalizing saved media file..."))
-                    emit(DownloadState.Success(outputFile.absolutePath))
-                } else {
-                    emit(DownloadState.Error("HTTP download failed with code ${response.code}"))
                 }
             }.onFailure { error ->
                 emit(DownloadState.Error(error.localizedMessage ?: "HTTP Stream download failed."))

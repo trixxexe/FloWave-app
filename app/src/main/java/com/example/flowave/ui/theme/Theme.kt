@@ -40,16 +40,24 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun FloWaveTheme(
     darkTheme: Boolean = true, // Default to AMOLED Dark Theme for audio aesthetic
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false, // Set to false to prioritize custom neon colors
+    accentColor: Color? = null,
+    fontScaleFactor: Float = 1.0f,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
+    val baseScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
+    }
+
+    val colorScheme = if (accentColor != null) {
+        baseScheme.copy(primary = accentColor)
+    } else {
+        baseScheme
     }
 
     val view = LocalView.current
@@ -65,9 +73,19 @@ fun FloWaveTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography(),
-        content = content
+    val currentDensity = androidx.compose.ui.platform.LocalDensity.current
+    val customDensity = androidx.compose.ui.unit.Density(
+        density = currentDensity.density,
+        fontScale = currentDensity.fontScale * fontScaleFactor
     )
+
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.ui.platform.LocalDensity provides customDensity
+    ) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography(),
+            content = content
+        )
+    }
 }

@@ -24,16 +24,33 @@ android {
   }
 
   signingConfigs {
-    val releaseKeystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-    val releaseKeystoreFile = file(releaseKeystorePath)
-    if (releaseKeystoreFile.exists()) {
+    val releaseKeystorePath = System.getenv("KEYSTORE_PATH")
+    val storePass = System.getenv("STORE_PASSWORD")
+    val alias = System.getenv("KEY_ALIAS")
+    val keyPass = System.getenv("KEY_PASSWORD")
+
+    val hasAnyReleaseSecret = releaseKeystorePath != null || storePass != null || alias != null || keyPass != null
+    val isReleaseBuild = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+
+    if (hasAnyReleaseSecret || isReleaseBuild) {
+      if (releaseKeystorePath == null) throw GradleException("Missing environment variable: KEYSTORE_PATH")
+      if (storePass == null) throw GradleException("Missing environment variable: STORE_PASSWORD")
+      if (alias == null) throw GradleException("Missing environment variable: KEY_ALIAS")
+      if (keyPass == null) throw GradleException("Missing environment variable: KEY_PASSWORD")
+
+      val releaseKeystoreFile = file(releaseKeystorePath)
+      if (!releaseKeystoreFile.exists()) {
+        throw GradleException("Keystore file does not exist at path: $releaseKeystorePath")
+      }
+
       create("release") {
         storeFile = releaseKeystoreFile
-        storePassword = System.getenv("STORE_PASSWORD") ?: "android"
-        keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
-        keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+        storePassword = storePass
+        keyAlias = alias
+        keyPassword = keyPass
       }
     }
+
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
       storePassword = "android"
@@ -45,7 +62,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       val releaseConfig = signingConfigs.findByName("release")
       signingConfig = releaseConfig ?: signingConfigs.getByName("debugConfig")
@@ -60,7 +78,12 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      isReturnDefaultValues = true
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files

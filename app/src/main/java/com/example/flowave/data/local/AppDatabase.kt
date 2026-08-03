@@ -9,6 +9,8 @@ import com.example.flowave.data.model.ListeningStat
 import com.example.flowave.data.model.Playlist
 import com.example.flowave.data.model.PlaylistTrackCrossRef
 import com.example.flowave.data.model.Track
+import com.example.flowave.data.model.QueueItem
+import com.example.flowave.data.model.QueueState
 
 @Database(
     entities = [
@@ -16,9 +18,11 @@ import com.example.flowave.data.model.Track
         Playlist::class,
         PlaylistTrackCrossRef::class,
         ListeningStat::class,
-        DownloadEntry::class
+        DownloadEntry::class,
+        QueueItem::class,
+        QueueState::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun playlistDao(): PlaylistDao
     abstract fun statDao(): StatDao
     abstract fun downloadDao(): DownloadDao
+    abstract fun queueDao(): QueueDao
 
     companion object {
         @Volatile

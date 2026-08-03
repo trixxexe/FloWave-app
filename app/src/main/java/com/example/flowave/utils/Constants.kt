@@ -14,12 +14,13 @@ object FloWaveConstants {
     // Connect and read timeouts
     const val CONNECT_TIMEOUT_SECONDS = 15L
     const val READ_TIMEOUT_SECONDS = 15L
-    const val FAST_TIMEOUT_SECONDS = 3L
+    const val FAST_TIMEOUT_SECONDS = 10L
     
     // Base URLs
-    const val INNERTUBE_KEY = "AIzaSyC186e8K1Z5mY666B_1A"
-    const val INNERTUBE_SEARCH_URL = "https://music.youtube.com/youtubei/v1/search?key=$INNERTUBE_KEY"
-    const val INNERTUBE_PLAYER_URL = "https://www.youtube.com/youtubei/v1/player?key=$INNERTUBE_KEY"
+    const val INNERTUBE_KEY_MUSIC = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30"
+    const val INNERTUBE_KEY_WEB = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+    const val INNERTUBE_SEARCH_URL = "https://music.youtube.com/youtubei/v1/search?key=$INNERTUBE_KEY_MUSIC"
+    const val INNERTUBE_PLAYER_URL = "https://www.youtube.com/youtubei/v1/player?key=$INNERTUBE_KEY_WEB"
 
     val PIPED_SEARCH_INSTANCES = listOf(
         "https://pipedapi.kavin.rocks/search?q=",

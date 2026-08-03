@@ -7,6 +7,8 @@ import com.example.flowave.data.model.ListeningStat
 import com.example.flowave.data.model.Playlist
 import com.example.flowave.data.model.PlaylistTrackCrossRef
 import com.example.flowave.data.model.Track
+import com.example.flowave.data.model.QueueItem
+import com.example.flowave.data.model.QueueState
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -120,4 +122,25 @@ interface DownloadDao {
 
     @Query("DELETE FROM download_entries WHERE id = :id")
     suspend fun deleteDownloadById(id: String)
+}
+
+@Dao
+interface QueueDao {
+    @Query("SELECT * FROM queue_items ORDER BY orderIndex ASC")
+    suspend fun getQueueItems(): List<QueueItem>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertQueueItems(items: List<QueueItem>)
+
+    @Query("DELETE FROM queue_items")
+    suspend fun clearQueueItems()
+
+    @Query("SELECT * FROM queue_state WHERE id = 1 LIMIT 1")
+    suspend fun getQueueState(): QueueState?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveQueueState(state: QueueState)
+
+    @Query("DELETE FROM queue_state")
+    suspend fun clearQueueState()
 }

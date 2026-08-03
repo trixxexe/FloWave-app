@@ -10,6 +10,7 @@ import com.example.flowave.ui.theme.FloWaveTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.example.flowave.utils.FloWaveCrashHandler.init(this)
         enableEdgeToEdge()
         setContent {
             FloWaveTheme {

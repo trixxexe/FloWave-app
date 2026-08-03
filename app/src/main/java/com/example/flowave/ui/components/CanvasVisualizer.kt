@@ -23,6 +23,9 @@ enum class VisualizerType {
     OSCILLOSCOPE
 }
 
+// NOTE: This visualizer is fully decorative to avoid requiring the sensitive RECORD_AUDIO (microphone) system permission.
+// Real-time audio analysis via android.media.audiofx.Visualizer has been intentionally bypassed 
+// to keep FloWave private, compliant, and extremely light on permissions.
 @Composable
 fun CanvasVisualizer(
     waveform: FloatArray,

@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.cancel
@@ -72,6 +73,12 @@ data class EqualizerState(
 class FloWaveAudioEngine(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private val innerTubeRepo = InnerTubeRepository()
+    private val db = com.example.flowave.data.local.AppDatabase.getDatabase(context)
+    private val queueDao = db.queueDao()
+    private val trackDao = db.trackDao()
+
+    private val panningAudioProcessor = PanningAudioProcessor()
+    private var mediaController: androidx.media3.session.MediaController? = null
 
     private var exoPlayer: ExoPlayer? = null
     val player: ExoPlayer? get() = exoPlayer
@@ -96,10 +103,79 @@ class FloWaveAudioEngine(private val context: Context) {
     val visualizerWaveform: StateFlow<FloatArray> = _visualizerWaveform
 
     private var progressJob: Job? = null
+    private var playerListener: Player.Listener? = null
 
     init {
         initPlayer()
         registerNetworkCallback()
+        restoreQueueAndState()
+    }
+
+    private fun persistQueueAndState() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val state = _playbackState.value
+                queueDao.clearQueueItems()
+                val queueItems = state.queue.mapIndexed { index, track ->
+                    trackDao.insertTrack(track)
+                    com.example.flowave.data.model.QueueItem(trackId = track.id, orderIndex = index)
+                }
+                queueDao.insertQueueItems(queueItems)
+                
+                val currentIdx = state.currentQueueIndex
+                val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
+                queueDao.saveQueueState(com.example.flowave.data.model.QueueState(currentQueueIndex = currentIdx, currentPositionMs = position))
+            } catch (e: Exception) {
+                android.util.Log.e("FloWaveAudioEngine", "Failed to persist queue: ${e.message}")
+            }
+        }
+    }
+
+    private fun persistQueueStateOnly() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val state = _playbackState.value
+                val currentIdx = state.currentQueueIndex
+                val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
+                queueDao.saveQueueState(com.example.flowave.data.model.QueueState(currentQueueIndex = currentIdx, currentPositionMs = position))
+            } catch (e: Exception) {
+                // Ignore transient write errors
+            }
+        }
+    }
+
+    private fun restoreQueueAndState() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val dbState = queueDao.getQueueState() ?: return@launch
+                val dbItems = queueDao.getQueueItems()
+                if (dbItems.isEmpty()) return@launch
+                
+                val tracks = dbItems.mapNotNull { item ->
+                    trackDao.getTrackById(item.trackId)
+                }
+                
+                if (tracks.isNotEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        _playbackState.value = _playbackState.value.copy(
+                            queue = tracks,
+                            currentQueueIndex = dbState.currentQueueIndex,
+                            currentTrack = tracks.getOrNull(dbState.currentQueueIndex),
+                            currentPositionMs = dbState.currentPositionMs
+                        )
+                        
+                        val mediaItems = tracks.mapNotNull { track -> createMediaItem(track) }
+                        exoPlayer?.setMediaItems(mediaItems)
+                        if (dbState.currentQueueIndex in tracks.indices) {
+                            exoPlayer?.seekTo(dbState.currentQueueIndex, dbState.currentPositionMs)
+                        }
+                        exoPlayer?.prepare()
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("FloWaveAudioEngine", "Failed to restore queue: ${e.message}")
+            }
+        }
     }
 
     @OptIn(UnstableApi::class)
@@ -113,12 +189,25 @@ class FloWaveAudioEngine(private val context: Context) {
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
             .setDataSourceFactory(customDataSourceFactory)
 
-        exoPlayer = ExoPlayer.Builder(context)
+        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: android.content.Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): androidx.media3.exoplayer.audio.AudioSink? {
+                return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setAudioProcessors(arrayOf(panningAudioProcessor))
+                    .build()
+            }
+        }
+
+        exoPlayer = ExoPlayer.Builder(context, renderersFactory)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setLooper(android.os.Looper.getMainLooper())
             .build().apply {
-                addListener(object : Player.Listener {
+                val listener = object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         _playbackState.value = _playbackState.value.copy(isPlaying = isPlaying)
                         if (isPlaying) {
@@ -140,8 +229,31 @@ class FloWaveAudioEngine(private val context: Context) {
                         updateFormatInfo()
                     }
 
+                    override fun onPositionDiscontinuity(
+                        oldPosition: Player.PositionInfo,
+                        newPosition: Player.PositionInfo,
+                        reason: Int
+                    ) {
+                        val p = exoPlayer ?: return
+                        _playbackState.value = _playbackState.value.copy(
+                            currentPositionMs = p.currentPosition,
+                            durationMs = p.duration.coerceAtLeast(0L)
+                        )
+                        updateFormatInfo()
+                    }
+
+                    override fun onEvents(player: Player, events: Player.Events) {
+                        _playbackState.value = _playbackState.value.copy(
+                            currentPositionMs = player.currentPosition,
+                            durationMs = player.duration.coerceAtLeast(0L)
+                        )
+                    }
+
                     override fun onPlayerError(error: PlaybackException) {
-                        error.printStackTrace()
+                        android.util.Log.e("FloWaveAudioEngine", "Player error encountered: ${error.message}", error)
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            android.widget.Toast.makeText(context, "Playback error: ${error.localizedMessage ?: error.message}", android.widget.Toast.LENGTH_LONG).show()
+                        }
                         val currentTrack = _playbackState.value.currentTrack
                         if (currentTrack != null && currentTrack.isOnline) {
                             val currentPos = _playbackState.value.currentPositionMs
@@ -200,16 +312,32 @@ class FloWaveAudioEngine(private val context: Context) {
                             )
                         }
                         updateFormatInfo()
+                        persistQueueAndState()
                     }
-                })
+                }
+                playerListener = listener
+                addListener(listener)
             }
 
         try {
-            // Start the foreground media service to handle media button controls & notifications
-            val intent = Intent(context, FloWaveMediaService::class.java)
-            context.startService(intent)
+            val sessionToken = androidx.media3.session.SessionToken(
+                context,
+                android.content.ComponentName(context, FloWaveMediaService::class.java)
+            )
+            val controllerFuture = androidx.media3.session.MediaController.Builder(context, sessionToken).buildAsync()
+            controllerFuture.addListener(
+                {
+                    try {
+                        mediaController = controllerFuture.get()
+                        android.util.Log.d("FloWaveAudioEngine", "MediaController bound to FloWaveMediaService successfully")
+                    } catch (e: Exception) {
+                        android.util.Log.e("FloWaveAudioEngine", "Failed to bind MediaController: ${e.message}")
+                    }
+                },
+                androidx.core.content.ContextCompat.getMainExecutor(context)
+            )
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error binding MediaController or initializing Service connection", e)
         }
 
         exoPlayer?.audioSessionId?.let { sessionId ->
@@ -282,16 +410,36 @@ class FloWaveAudioEngine(private val context: Context) {
 
     @OptIn(UnstableApi::class)
     private fun setupAudioEffects(audioSessionId: Int) {
+        if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) return
+        
         try {
-            if (audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
-                equalizer = Equalizer(0, audioSessionId).apply { enabled = true }
-                bassBoost = BassBoost(0, audioSessionId).apply { enabled = true }
-                virtualizer = Virtualizer(0, audioSessionId).apply { enabled = true }
-                loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply { enabled = true }
-                presetReverb = PresetReverb(0, audioSessionId).apply { enabled = true }
-            }
+            equalizer = Equalizer(0, audioSessionId).apply { enabled = true }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize Equalizer: ${e.message}", e)
+        }
+        
+        try {
+            bassBoost = BassBoost(0, audioSessionId).apply { enabled = true }
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize BassBoost: ${e.message}", e)
+        }
+        
+        try {
+            virtualizer = Virtualizer(0, audioSessionId).apply { enabled = true }
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize Virtualizer: ${e.message}", e)
+        }
+        
+        try {
+            loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply { enabled = true }
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize LoudnessEnhancer: ${e.message}", e)
+        }
+        
+        try {
+            presetReverb = PresetReverb(0, audioSessionId).apply { enabled = true }
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize PresetReverb: ${e.message}", e)
         }
     }
 
@@ -300,7 +448,7 @@ class FloWaveAudioEngine(private val context: Context) {
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error stopping playback", e)
         }
         stopProgressLoop()
         _playbackState.value = PlaybackState()
@@ -318,7 +466,7 @@ class FloWaveAudioEngine(private val context: Context) {
             try {
                 metadataBuilder.setArtworkUri(Uri.parse(artUri))
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("FloWaveAudioEngine", "Error parsing artwork URI", e)
             }
         }
 
@@ -350,6 +498,7 @@ class FloWaveAudioEngine(private val context: Context) {
         player.setMediaItems(mediaItems, startIndex, 0L)
         player.prepare()
         player.play()
+        persistQueueAndState()
     }
 
     fun playTrack(track: Track) {
@@ -510,12 +659,14 @@ class FloWaveAudioEngine(private val context: Context) {
         val insertIndex = if (currentIdx in queue.indices) currentIdx + 1 else queue.size
         queue.add(insertIndex, track)
         _playbackState.value = _playbackState.value.copy(queue = queue)
+        persistQueueAndState()
     }
 
     fun addToQueueLast(track: Track) {
         val queue = _playbackState.value.queue.toMutableList()
         queue.add(track)
         _playbackState.value = _playbackState.value.copy(queue = queue)
+        persistQueueAndState()
     }
 
     fun removeFromQueue(index: Int) {
@@ -525,6 +676,7 @@ class FloWaveAudioEngine(private val context: Context) {
             var currentIdx = _playbackState.value.currentQueueIndex
             if (index < currentIdx) currentIdx--
             _playbackState.value = _playbackState.value.copy(queue = queue, currentQueueIndex = currentIdx)
+            persistQueueAndState()
         }
     }
 
@@ -532,6 +684,7 @@ class FloWaveAudioEngine(private val context: Context) {
         exoPlayer?.stop()
         exoPlayer?.clearMediaItems()
         _playbackState.value = PlaybackState()
+        persistQueueAndState()
     }
 
     fun toggleCrossfade() {
@@ -555,7 +708,7 @@ class FloWaveAudioEngine(private val context: Context) {
                 _equalizerState.value = _equalizerState.value.copy(bandLevelsMs = currentLevels)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error setting equalizer band level", e)
         }
     }
 
@@ -564,7 +717,7 @@ class FloWaveAudioEngine(private val context: Context) {
             bassBoost?.setStrength(strength)
             _equalizerState.value = _equalizerState.value.copy(bassBoostStrength = strength)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error setting bass boost strength", e)
         }
     }
 
@@ -573,7 +726,7 @@ class FloWaveAudioEngine(private val context: Context) {
             virtualizer?.setStrength(strength)
             _equalizerState.value = _equalizerState.value.copy(virtualizerStrength = strength)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error setting virtualizer strength", e)
         }
     }
 
@@ -582,7 +735,7 @@ class FloWaveAudioEngine(private val context: Context) {
             loudnessEnhancer?.setTargetGain(gainMb)
             _equalizerState.value = _equalizerState.value.copy(loudnessEnhancerGainDb = gainMb / 100f)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error setting loudness enhancer gain", e)
         }
     }
 
@@ -593,9 +746,8 @@ class FloWaveAudioEngine(private val context: Context) {
 
     fun setStereoBalance(balance: Float) {
         _equalizerState.value = _equalizerState.value.copy(stereoBalance = balance)
-        val left = (1f - balance).coerceIn(0f, 1f)
-        val right = (1f + balance).coerceIn(0f, 1f)
-        exoPlayer?.volume = (left + right) / 2f
+        panningAudioProcessor.setBalance(balance)
+        exoPlayer?.volume = 1f
     }
 
     fun setPresetReverbName(name: String, preset: Short) {
@@ -603,7 +755,7 @@ class FloWaveAudioEngine(private val context: Context) {
             presetReverb?.preset = preset
             _equalizerState.value = _equalizerState.value.copy(presetReverbName = name, presetReverb = preset)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error setting preset reverb", e)
         }
     }
 
@@ -619,6 +771,7 @@ class FloWaveAudioEngine(private val context: Context) {
         progressJob?.cancel()
         progressJob = scope.launch {
             var phase = 0f
+            var tickCount = 0
             while (true) {
                 val player = exoPlayer
                 if (player != null && player.isPlaying) {
@@ -645,8 +798,13 @@ class FloWaveAudioEngine(private val context: Context) {
                     _visualizerWaveform.value = wave
                     
                     updateFormatInfo()
+
+                    tickCount++
+                    if (tickCount % 6 == 0) { // 6 * 500ms = 3000ms = 3 seconds (was 30 * 100ms)
+                        persistQueueStateOnly()
+                    }
                 }
-                delay(100L)
+                delay(500L) // 500ms delay is 5x more battery friendly!
             }
         }
     }
@@ -670,7 +828,7 @@ class FloWaveAudioEngine(private val context: Context) {
                                     player.prepare()
                                     player.play()
                                 } catch (e: Exception) {
-                                    e.printStackTrace()
+                                    android.util.Log.e("FloWaveAudioEngine", "Error preparing/playing on connection restore", e)
                                 }
                             }
                         }
@@ -687,7 +845,7 @@ class FloWaveAudioEngine(private val context: Context) {
             }
             connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error registering network callback", e)
         }
     }
 
@@ -695,7 +853,7 @@ class FloWaveAudioEngine(private val context: Context) {
         try {
             networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error unregistering network callback", e)
         }
     }
 
@@ -703,15 +861,45 @@ class FloWaveAudioEngine(private val context: Context) {
         try {
             scope.cancel()
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveAudioEngine", "Error cancelling coroutine scope during release", e)
+        }
+        try {
+            mediaController?.release()
+            mediaController = null
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing mediaController during release", e)
         }
         unregisterNetworkCallback()
-        exoPlayer?.release()
-        equalizer?.release()
-        bassBoost?.release()
-        virtualizer?.release()
-        loudnessEnhancer?.release()
-        presetReverb?.release()
+        
+        playerListener?.let {
+            exoPlayer?.removeListener(it)
+            playerListener = null
+        }
+
+        try {
+            exoPlayer?.release()
+            exoPlayer = null
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing exoPlayer", e)
+        }
+
+        try {
+            equalizer?.release()
+            equalizer = null
+            bassBoost?.release()
+            bassBoost = null
+            virtualizer?.release()
+            virtualizer = null
+            loudnessEnhancer?.release()
+            loudnessEnhancer = null
+            presetReverb?.release()
+            presetReverb = null
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing audio effects", e)
+        }
+
+        // Release the audio SimpleCache
+        FloWaveCacheManager.releaseCache()
     }
 
     companion object {

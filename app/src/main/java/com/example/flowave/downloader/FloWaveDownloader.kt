@@ -176,8 +176,7 @@ class FloWaveDownloader(
             if (totalExpectedLength > 0 && existingBytes == totalExpectedLength) {
                 android.util.Log.d("FloWaveDownloader", "File already fully downloaded. Skipping network request.")
                 downloadDao.updateProgress(taskId, 1.0f, totalExpectedLength, DownloadStatus.DONE)
-                downloadDao.markCompleted(taskId, file.absolutePath, DownloadStatus.DONE)
-                saveToOfflineLibrary(track, file, musicDir)
+                handleCompletedDownload(track, file, musicDir, taskId)
                 return@withContext
             }
 
@@ -284,8 +283,7 @@ class FloWaveDownloader(
 
                     // Download completed successfully, do not delete the file
                     fileToCleanup = null
-                    downloadDao.markCompleted(taskId, file.absolutePath, DownloadStatus.DONE)
-                    saveToOfflineLibrary(track, file, musicDir)
+                    handleCompletedDownload(track, file, musicDir, taskId)
                 } else {
                     val errorCode = resp.code
                     downloadDao.markFailed(taskId, "HTTP Error Code: $errorCode", DownloadStatus.FAILED)
@@ -319,13 +317,44 @@ class FloWaveDownloader(
         }
     }
 
-    private suspend fun saveToOfflineLibrary(track: InnerTubeTrack, file: File, musicDir: File) {
+    private suspend fun handleCompletedDownload(track: InnerTubeTrack, file: File, musicDir: File, taskId: String): Boolean {
+        val retriever = android.media.MediaMetadataRetriever()
+        var durationMs: Long = 0L
+        try {
+            retriever.setDataSource(file.absolutePath)
+            val timeStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+            durationMs = timeStr?.toLongOrNull() ?: 0L
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveDownloader", "Failed to extract duration from ${file.absolutePath}", e)
+        } finally {
+            try {
+                retriever.release()
+            } catch (e: Exception) {
+                android.util.Log.e("FloWaveDownloader", "Failed to release MediaMetadataRetriever", e)
+            }
+        }
+
+        if (durationMs <= 0L) {
+            android.util.Log.e("FloWaveDownloader", "Extracted duration is invalid ($durationMs) for ${file.absolutePath}. Deleting file.")
+            if (file.exists()) {
+                file.delete()
+            }
+            downloadDao.markFailed(taskId, "Invalid or corrupt downloaded audio file (missing duration metadata).", DownloadStatus.FAILED)
+            return false
+        }
+
+        downloadDao.markCompleted(taskId, file.absolutePath, DownloadStatus.DONE)
+        saveToOfflineLibrary(track, file, musicDir, durationMs)
+        return true
+    }
+
+    private suspend fun saveToOfflineLibrary(track: InnerTubeTrack, file: File, musicDir: File, durationMs: Long) {
         val downloadedTrack = Track(
             id = "dl_${track.id}",
             title = track.title,
             artist = track.artist,
             album = if (track.album.isNotEmpty()) track.album else "Downloaded",
-            durationMs = 210000L,
+            durationMs = durationMs,
             mediaUri = file.absolutePath,
             artworkUri = track.thumbnailUrl,
             isOnline = false,

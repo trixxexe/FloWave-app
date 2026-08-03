@@ -23,12 +23,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.flowave.data.model.UserProfile
 import com.example.flowave.ui.components.*
 import com.example.flowave.ui.theme.*
+import com.example.flowave.utils.SettingsSchema
+import com.example.flowave.utils.SettingDefinition
+import com.example.flowave.utils.SettingType
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     userProfile: UserProfile,
@@ -40,16 +46,28 @@ fun ProfileScreen(
     onBackgroundPresetSelected: (String) -> Unit = {},
     onCustomBgUrlEntered: (String?) -> Unit = {},
     onAudioSettingsChanged: (Boolean, Boolean) -> Unit = { _, _ -> },
+    settingsJson: String = SettingsSchema.getDefaultJson(),
+    onSettingUpdated: (String, Any) -> Unit = { _, _ -> },
+    onExportSettings: suspend () -> String = { "" },
+    onImportSettings: suspend (String) -> Boolean = { _ -> false },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var usernameInput by remember { mutableStateOf(userProfile.username) }
     var bioInput by remember { mutableStateOf(userProfile.bio) }
     var customUrlInput by remember { mutableStateOf(userProfile.customBgUrl ?: "") }
     var isEditing by remember { mutableStateOf(false) }
 
-    var normEnabled by remember { mutableStateOf(true) }
-    var gaplessEnabled by remember { mutableStateOf(true) }
+    // Multi-tap advanced mode detection
+    var versionClickCount by remember { mutableStateOf(0) }
+    var isAdvancedUnlocked by remember { mutableStateOf(false) }
+
+    // Dialog state controllers
+    var activeChoiceDef by remember { mutableStateOf<SettingDefinition?>(null) }
+    var activeStringDef by remember { mutableStateOf<SettingDefinition?>(null) }
+    var showImportDialog by remember { mutableStateOf(false) }
+    var showCustomColorDialog by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
 
@@ -86,7 +104,7 @@ fun ProfileScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Widget 3: Liquid Glass Profile Card
+        // Profile Card
         LiquidGlassProfileWidget(
             profile = userProfile,
             onEditClick = { isEditing = !isEditing }
@@ -247,56 +265,315 @@ fun ProfileScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Preferred Quality Liquid Glass Widget
-        Text("Audio Processing & Output Stream", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        // Curated Theme Quick Picks
+        Text("Accent Color Palette", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        Spacer(modifier = Modifier.height(8.dp))
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Select Curated Primary Accent Color", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(10.dp))
+                
+                val curatedColors = listOf(
+                    "Cyan" to "#00F0FF",
+                    "Violet" to "#FF1744",
+                    "Purple" to "#A020F0",
+                    "Green" to "#00FF00",
+                    "Gold" to "#FFD700"
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    curatedColors.forEach { (name, hex) ->
+                        val color = Color(android.graphics.Color.parseColor(hex))
+                        val activeHex = SettingsSchema.getValue(settingsJson, "custom_accent_color")
+                        val isSelected = activeHex.replace("#", "").lowercase() == hex.replace("#", "").lowercase()
+                        
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(color)
+                                .border(
+                                    width = if (isSelected) 3.dp else 1.dp,
+                                    color = if (isSelected) Color.White else Color.Transparent,
+                                    shape = CircleShape
+                                )
+                                .clickable {
+                                    onSettingUpdated("custom_accent_color", hex)
+                                    Toast.makeText(context, "$name Accent applied", Toast.LENGTH_SHORT).show()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = PureBlack, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Render dynamic categories
+        val categories = listOf("Audio", "Appearance", "Gestures")
+        categories.forEach { category ->
+            val defs = SettingsSchema.DEFINITIONS.filter { it.category == category }
+            if (defs.isNotEmpty()) {
+                Text("$category Preferences", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        defs.forEach { def ->
+                            when (def.type) {
+                                SettingType.BOOLEAN -> {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(def.label, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(def.description, color = TextMuted, fontSize = 11.sp)
+                                        }
+                                        Switch(
+                                            checked = SettingsSchema.getBoolean(settingsJson, def.key),
+                                            onCheckedChange = {
+                                                onSettingUpdated(def.key, it)
+                                                // sync legacy options directly
+                                                if (def.key == "audio_normalization" || def.key == "gapless_playback") {
+                                                    val norm = if (def.key == "audio_normalization") it else SettingsSchema.getBoolean(settingsJson, "audio_normalization")
+                                                    val gapless = if (def.key == "gapless_playback") it else SettingsSchema.getBoolean(settingsJson, "gapless_playback")
+                                                    onAudioSettingsChanged(norm, gapless)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                                SettingType.CHOICE -> {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { activeChoiceDef = def }
+                                            .padding(vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(def.label, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(def.description, color = TextMuted, fontSize = 11.sp)
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = SettingsSchema.getValue(settingsJson, def.key),
+                                                color = CyanNeon,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(end = 6.dp)
+                                            )
+                                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                                SettingType.STRING -> {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { activeStringDef = def }
+                                            .padding(vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(def.label, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(def.description, color = TextMuted, fontSize = 11.sp)
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            val displayVal = SettingsSchema.getValue(settingsJson, def.key)
+                                            Text(
+                                                text = if (displayVal.length > 15) displayVal.take(12) + "..." else displayVal,
+                                                color = PurpleNeon,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(end = 6.dp)
+                                            )
+                                            Icon(Icons.Default.Edit, contentDescription = "Edit", tint = TextMuted, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+        }
+
+        // Render Advanced Category if unlocked
+        if (isAdvancedUnlocked) {
+            Text("Advanced Developer Options", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = CyanNeon)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Accent Color Custom Hex Input Trigger
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showCustomColorDialog = true }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Hex Color Picker", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Define any custom UI highlight hex code directly", color = TextMuted, fontSize = 11.sp)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = SettingsSchema.getValue(settingsJson, "custom_accent_color"),
+                                color = CyanNeon,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(end = 6.dp)
+                            )
+                            Icon(Icons.Default.Colorize, contentDescription = "Pick Color", tint = TextMuted, modifier = Modifier.size(16.dp))
+                        }
+                    }
+
+                    // Loop through Advanced settings
+                    val advDefs = SettingsSchema.DEFINITIONS.filter { it.category == "Advanced" }
+                    advDefs.forEach { def ->
+                        when (def.type) {
+                            SettingType.BOOLEAN -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(def.label, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                        Text(def.description, color = TextMuted, fontSize = 11.sp)
+                                    }
+                                    Switch(
+                                        checked = SettingsSchema.getBoolean(settingsJson, def.key),
+                                        onCheckedChange = { onSettingUpdated(def.key, it) }
+                                    )
+                                }
+                            }
+                            SettingType.CHOICE -> {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { activeChoiceDef = def }
+                                        .padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(def.label, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                        Text(def.description, color = TextMuted, fontSize = 11.sp)
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = SettingsSchema.getValue(settingsJson, def.key),
+                                            color = CyanNeon,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(end = 6.dp)
+                                        )
+                                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                            SettingType.STRING -> {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { activeStringDef = def }
+                                        .padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(def.label, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                        Text(def.description, color = TextMuted, fontSize = 11.sp)
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val displayVal = SettingsSchema.getValue(settingsJson, def.key)
+                                        Text(
+                                            text = if (displayVal.length > 15) displayVal.take(12) + "..." else displayVal,
+                                            color = PurpleNeon,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(end = 6.dp)
+                                        )
+                                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = TextMuted, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+
+        // Backup and Restore Section
+        Text("Data Management & Backups", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
         Spacer(modifier = Modifier.height(8.dp))
 
-        LiquidGlassQualitySelectorWidget(
-            selectedQuality = userProfile.preferredQuality,
-            onQualitySelected = { quality ->
-                onQualitySelected(quality)
-                Toast.makeText(context, "Streaming quality: $quality", Toast.LENGTH_SHORT).show()
-            }
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 18.dp) {
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
             Column(modifier = Modifier.padding(16.dp)) {
+                Text("Export or Restore settings JSON", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("Enables backup, hand-editing configuration, or transferring profile to other devices.", color = TextMuted, fontSize = 11.sp)
+                Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Column {
-                        Text("Volume Loudness Normalization", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text("EBU R128 gain matching for smooth playback", color = TextMuted, fontSize = 11.sp)
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                val path = onExportSettings()
+                                if (path.isNotEmpty()) {
+                                    Toast.makeText(context, "Settings exported successfully!", Toast.LENGTH_LONG).show()
+                                    // Also show sharing log
+                                    android.util.Log.d("ProfileScreen", "Backup stored at: $path")
+                                } else {
+                                    Toast.makeText(context, "Export failed", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Backup, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Backup JSON", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
-                    Switch(
-                        checked = normEnabled,
-                        onCheckedChange = {
-                            normEnabled = it
-                            onAudioSettingsChanged(normEnabled, gaplessEnabled)
-                        }
-                    )
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Gapless Track Transition", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Zero silent pause between album tracks", color = TextMuted, fontSize = 11.sp)
+
+                    Button(
+                        onClick = { showImportDialog = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = PurpleNeon, contentColor = PureBlack),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Restore JSON", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
-                    Switch(
-                        checked = gaplessEnabled,
-                        onCheckedChange = {
-                            gaplessEnabled = it
-                            onAudioSettingsChanged(normEnabled, gaplessEnabled)
-                        }
-                    )
                 }
             }
         }
@@ -355,9 +632,21 @@ fun ProfileScreen(
                         Icon(Icons.Default.GraphicEq, contentDescription = null, tint = PureBlack)
                     }
                     Spacer(modifier = Modifier.width(12.dp))
-                    Column {
+                    Column(
+                        modifier = Modifier.clickable {
+                            versionClickCount++
+                            if (versionClickCount >= 5 && !isAdvancedUnlocked) {
+                                isAdvancedUnlocked = true
+                                Toast.makeText(context, "Advanced developer options unlocked!", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    ) {
                         Text("FloWave Music Engine", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-                        Text("v2.4 Pro Build • Open Source Core", color = TextMuted, fontSize = 12.sp)
+                        Text(
+                            text = "v2.4 Pro Build • Open Source Core" + if (isAdvancedUnlocked) " [DEV MODE]" else "",
+                            color = if (isAdvancedUnlocked) CyanNeon else TextMuted,
+                            fontSize = 12.sp
+                        )
                     }
                 }
 
@@ -445,5 +734,221 @@ fun ProfileScreen(
 
         Spacer(modifier = Modifier.height(30.dp))
     }
-}
 
+    // Dynamic Choice Dialog selector
+    if (activeChoiceDef != null) {
+        val def = activeChoiceDef!!
+        val currentValue = SettingsSchema.getValue(settingsJson, def.key)
+        AlertDialog(
+            onDismissRequest = { activeChoiceDef = null },
+            title = { Text("Select ${def.label}", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(def.description, color = TextMuted, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    def.choices.forEach { choice ->
+                        val isSelected = choice.value == currentValue
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) CyanNeon.copy(alpha = 0.15f) else Color.Transparent)
+                                .clickable {
+                                    onSettingUpdated(def.key, choice.value)
+                                    if (def.key == "preferred_quality") {
+                                        onQualitySelected(choice.value)
+                                    }
+                                    activeChoiceDef = null
+                                }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(choice.label, color = if (isSelected) CyanNeon else TextPrimary, fontSize = 14.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                            if (isSelected) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { activeChoiceDef = null }) {
+                    Text("Cancel", color = CyanNeon)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    // Dynamic Custom String Input Dialog selector
+    if (activeStringDef != null) {
+        val def = activeStringDef!!
+        var textInput by remember { mutableStateOf(SettingsSchema.getValue(settingsJson, def.key)) }
+        AlertDialog(
+            onDismissRequest = { activeStringDef = null },
+            title = { Text(def.label, color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(def.description, color = TextMuted, fontSize = 12.sp)
+                    OutlinedTextField(
+                        value = textInput,
+                        onValueChange = { textInput = it },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CyanNeon,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSettingUpdated(def.key, textInput)
+                        activeStringDef = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack)
+                ) {
+                    Text("Save", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { activeStringDef = null }) {
+                    Text("Cancel", color = CyanNeon)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    // Custom Hex Color Picker Dialog
+    if (showCustomColorDialog) {
+        var hexInput by remember { mutableStateOf(SettingsSchema.getValue(settingsJson, "custom_accent_color")) }
+        val parsedColor = remember(hexInput) {
+            try {
+                val cleanHex = hexInput.trim().replace("#", "")
+                if (cleanHex.length == 6) {
+                    Color(android.graphics.Color.parseColor("#$cleanHex"))
+                } else if (cleanHex.length == 8) {
+                    Color(android.graphics.Color.parseColor("#$cleanHex"))
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { showCustomColorDialog = false },
+            title = { Text("Custom Accent Color", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Enter any custom color hex code (e.g. #FF1744 for pink-red, #00FFCC for teal).", color = TextMuted, fontSize = 12.sp)
+                    OutlinedTextField(
+                        value = hexInput,
+                        onValueChange = { hexInput = it },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CyanNeon,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Live Preview: ", color = TextPrimary, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(parsedColor ?: Color.Gray)
+                                .border(1.dp, Color.White, CircleShape)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (parsedColor != null) {
+                            onSettingUpdated("custom_accent_color", hexInput)
+                            showCustomColorDialog = false
+                            Toast.makeText(context, "Applied custom color $hexInput", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Invalid hex format", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack)
+                ) {
+                    Text("Apply", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomColorDialog = false }) {
+                    Text("Cancel", color = CyanNeon)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    // Dynamic Restore Settings Dialog
+    if (showImportDialog) {
+        var rawJson by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showImportDialog = false },
+            title = { Text("Restore Settings JSON", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Paste raw settings JSON to restore your preferences.", color = TextMuted, fontSize = 12.sp)
+                    OutlinedTextField(
+                        value = rawJson,
+                        onValueChange = { rawJson = it },
+                        placeholder = { Text("""{"preferred_theme":"GLASS","list_density":"Comfortable"...}""", color = TextMuted, fontSize = 11.sp) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CyanNeon,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            val success = onImportSettings(rawJson)
+                            if (success) {
+                                Toast.makeText(context, "Settings restored successfully!", Toast.LENGTH_SHORT).show()
+                                showImportDialog = false
+                            } else {
+                                Toast.makeText(context, "Invalid backup configuration", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack)
+                ) {
+                    Text("Restore", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportDialog = false }) {
+                    Text("Cancel", color = CyanNeon)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+}

@@ -37,10 +37,15 @@ fun LibraryScreen(
     onSearchQueryChange: (String) -> Unit,
     onEditTagClick: (Track) -> Unit,
     onToggleFavoriteClick: (Track) -> Unit,
+    onPlayQueue: ((List<Track>, Int) -> Unit)? = null,
+    onAddToQueueNext: ((Track) -> Unit)? = null,
+    onAddToQueueLast: ((Track) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableStateOf(0) } // 0: Local Songs, 1: Online Search, 2: Favorites
+    var selectedTab by remember { mutableStateOf(0) } // 0: Local Songs, 1: Folders, 2: Online Search, 3: Favorites
+    var selectedFolder by remember { mutableStateOf<String?>(null) }
+    var folderSortBy by remember { mutableStateOf("Title") } // "Title", "Artist"
 
     Column(
         modifier = modifier
@@ -166,32 +171,136 @@ fun LibraryScreen(
 
                 1 -> {
                     // Folders Browser
-                    val folderGroups = localTracks.groupBy { it.folderPath ?: "Internal Storage" }
-                    if (folderGroups.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No folders found. Scan device storage.", color = TextMuted)
+                    if (selectedFolder == null) {
+                        val folderGroups = localTracks.groupBy { it.folderPath ?: "Internal Storage" }
+                        if (folderGroups.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("No folders found. Scan device storage.", color = TextMuted)
+                            }
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                items(folderGroups.keys.toList(), key = { it }) { folderPath ->
+                                    val folderTracks = folderGroups[folderPath] ?: emptyList()
+                                    GlassCard(
+                                        modifier = Modifier.fillMaxWidth().clickable {
+                                            selectedFolder = folderPath
+                                        },
+                                        cornerRadius = 16.dp
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Folder, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(32.dp))
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(folderPath.substringAfterLast('/'), color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                                Text("${folderTracks.size} audio files • $folderPath", color = TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            }
+                                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(folderGroups.keys.toList(), key = { it }) { folderPath ->
-                                val folderTracks = folderGroups[folderPath] ?: emptyList()
-                                GlassCard(
-                                    modifier = Modifier.fillMaxWidth().clickable {
-                                        if (folderTracks.isNotEmpty()) onTrackClick(folderTracks.first())
-                                    },
-                                    cornerRadius = 16.dp
+                        // Navigating Inside Folder
+                        val currentPath = selectedFolder!!
+                        val rawTracks = localTracks.filter { it.folderPath == currentPath }
+                        val folderTracks = if (folderSortBy == "Title") {
+                            rawTracks.sortedBy { it.title.lowercase() }
+                        } else {
+                            rawTracks.sortedBy { it.artist.lowercase() }
+                        }
+
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(14.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                                    IconButton(
+                                        onClick = { selectedFolder = null },
+                                        modifier = Modifier.size(36.dp)
                                     ) {
-                                        Icon(Icons.Default.Folder, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(32.dp))
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(folderPath.substringAfterLast('/'), color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                            Text("${folderTracks.size} audio files • $folderPath", color = TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
+                                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = CyanNeon)
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Column {
+                                        Text(
+                                            text = currentPath.substringAfterLast('/'),
+                                            color = TextPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 16.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${folderTracks.size} songs",
+                                            color = TextMuted,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = {
+                                            folderSortBy = if (folderSortBy == "Title") "Artist" else "Title"
+                                        },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (folderSortBy == "Title") Icons.Default.SortByAlpha else Icons.Default.Sort,
+                                            contentDescription = "Sort folder songs",
+                                            tint = CyanNeon,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            if (folderTracks.isNotEmpty()) {
+                                                if (onPlayQueue != null) {
+                                                    onPlayQueue(folderTracks, 0)
+                                                } else {
+                                                    onTrackClick(folderTracks.first())
+                                                }
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp), tint = PureBlack)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Play All", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            if (folderTracks.isEmpty()) {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("No playable songs inside this folder.", color = TextMuted)
+                                }
+                            } else {
+                                LazyColumn(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    items(folderTracks, key = { it.id }) { track ->
+                                        FolderTrackListItem(
+                                            track = track,
+                                            onTrackClick = { onTrackClick(track) },
+                                            onPlayNext = { onAddToQueueNext?.invoke(track) },
+                                            onPlayLast = { onAddToQueueLast?.invoke(track) },
+                                            onFavoriteClick = { onToggleFavoriteClick(track) }
+                                        )
                                     }
                                 }
                             }
@@ -346,6 +455,84 @@ fun OnlineTrackListItem(
 
             IconButton(onClick = onDownloadClick) {
                 Icon(Icons.Default.Download, contentDescription = "Download Audio", tint = CyanNeon)
+            }
+        }
+    }
+}
+
+@Composable
+fun FolderTrackListItem(
+    track: Track,
+    onTrackClick: () -> Unit,
+    onPlayNext: () -> Unit,
+    onPlayLast: () -> Unit,
+    onFavoriteClick: () -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onTrackClick() },
+        cornerRadius = 16.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AsyncImage(
+                model = track.artworkUri ?: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=200",
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(RoundedCornerShape(10.dp))
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(track.title, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.artist, color = TextMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+
+            IconButton(onClick = onFavoriteClick) {
+                Icon(
+                    imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = "Favorite",
+                    tint = if (track.isFavorite) CyanNeon else TextMuted
+                )
+            }
+
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "More Actions", tint = TextMuted)
+                }
+
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier.background(DarkSurface)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Play Next", color = TextPrimary) },
+                        onClick = {
+                            showMenu = false
+                            onPlayNext()
+                        },
+                        leadingIcon = { Icon(Icons.Default.QueuePlayNext, contentDescription = null, tint = CyanNeon) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Add to Queue Last", color = TextPrimary) },
+                        onClick = {
+                            showMenu = false
+                            onPlayLast()
+                        },
+                        leadingIcon = { Icon(Icons.Default.Queue, contentDescription = null, tint = CyanNeon) }
+                    )
+                }
             }
         }
     }

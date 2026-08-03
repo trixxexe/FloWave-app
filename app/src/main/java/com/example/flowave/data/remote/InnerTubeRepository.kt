@@ -24,6 +24,21 @@ data class InnerTubeClientConfig(
 )
 
 object InnerTubeClients {
+    val ANDROID_TESTSUITE = InnerTubeClientConfig(
+        clientName = "ANDROID_TESTSUITE",
+        clientVersion = "1.9",
+        userAgent = "com.google.android.youtube.testsuite/1.9 (Linux; U; Android 5.0.1; en_US; One Plus One Build/LRX22C)"
+    )
+    val ANDROID_EMBEDDED = InnerTubeClientConfig(
+        clientName = "ANDROID_EMBEDDED_PLAYER",
+        clientVersion = "19.30.36",
+        userAgent = "com.google.android.youtube.tv/19.30.36 (Linux; U; Android 12; en_US; Chromecast Build/STTE.220621.019)"
+    )
+    val ANDROID_VR = InnerTubeClientConfig(
+        clientName = "ANDROID_VR",
+        clientVersion = "1.54.45",
+        userAgent = "Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/15.3.0.0.3.284240751 SamsungBrowser/4.0 Chrome/89.0.4389.90 VR Mobile Safari/537.36"
+    )
     val ANDROID_MUSIC = InnerTubeClientConfig(
         clientName = "ANDROID_MUSIC",
         clientVersion = "6.25.52",
@@ -45,7 +60,7 @@ object InnerTubeClients {
         userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_WEB_EMBEDDED
     )
 
-    val FALLBACK_CHAIN = listOf(TVHTML5_SIMPLY_EMBEDDED, WEB_EMBEDDED, ANDROID_MUSIC, WEB_REMIX)
+    val FALLBACK_CHAIN = listOf(ANDROID_TESTSUITE, ANDROID_EMBEDDED, ANDROID_VR, TVHTML5_SIMPLY_EMBEDDED, WEB_EMBEDDED, ANDROID_MUSIC, WEB_REMIX)
 }
 
 class InnerTubeRepository {
@@ -60,6 +75,33 @@ class InnerTubeRepository {
 
     // Cache stream URLs for 2 hours to avoid re-querying YouTube endpoints
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
+    val streamDurationCache = ConcurrentHashMap<String, Long>()
+
+    fun getCachedDuration(videoId: String): Long {
+        return streamDurationCache[videoId] ?: 0L
+    }
+
+    fun parseDurationText(text: String): Long {
+        val parts = text.split(":")
+        var seconds = 0L
+        try {
+            if (parts.size == 1) {
+                seconds = parts[0].toLongOrNull() ?: 0L
+            } else if (parts.size == 2) {
+                val minutes = parts[0].toLongOrNull() ?: 0L
+                val secs = parts[1].toLongOrNull() ?: 0L
+                seconds = minutes * 60 + secs
+            } else if (parts.size == 3) {
+                val hours = parts[0].toLongOrNull() ?: 0L
+                val minutes = parts[1].toLongOrNull() ?: 0L
+                val secs = parts[2].toLongOrNull() ?: 0L
+                seconds = hours * 3600 + minutes * 60 + secs
+            }
+        } catch (e: Exception) {
+            // Fallback
+        }
+        return if (seconds > 0L) seconds * 1000L else 210000L
+    }
 
     private val fastClient = client.newBuilder()
         .connectTimeout(FloWaveConstants.FAST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -119,6 +161,7 @@ class InnerTubeRepository {
 
     suspend fun searchTracks(query: String): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
+        ensureKeysUpdated()
         val tracks = mutableListOf<InnerTubeTrack>()
 
         // ENGINE 0: YouTube HTML Scraping (ytInitialData) - Extremely robust, zero-key, unfailing
@@ -133,6 +176,9 @@ class InnerTubeRepository {
 
             executeWithRetry(request).use { response ->
                 val html = response.body?.string() ?: ""
+                if (html.isNotEmpty()) {
+                    extractAndCacheKeys(html)
+                }
                 if (response.isSuccessful && html.isNotEmpty()) {
                     val jsonString = extractJsonFromHtml(html)
                     if (jsonString != null) {
@@ -185,6 +231,10 @@ class InnerTubeRepository {
                 val json = JSONObject(bodyString)
                 val parsed = InnerTubeParser.parseInnerTubeSearchJson(json)
                 tracks.addAll(parsed)
+                if (parsed.isNotEmpty()) {
+                    android.util.Log.d("InnerTubeRepository", "Search results fetched from Engine 1 (Official InnerTube Search) for query: $query")
+                    println("[TEST-LOG] Search results fetched from Engine 1 (Official InnerTube Search) for query: $query")
+                }
             }
             response.close()
         } catch (e: Exception) {
@@ -323,6 +373,8 @@ class InnerTubeRepository {
             }
         }
 
+        ensureKeysUpdated()
+
         // Multi-Client Fallback Chain: ANDROID_MUSIC -> WEB_REMIX -> TVHTML5_SIMPLY_EMBEDDED
         for (clientConfig in InnerTubeClients.FALLBACK_CHAIN) {
             try {
@@ -330,22 +382,43 @@ class InnerTubeRepository {
                     put("context", JSONObject().apply {
                         put("client", JSONObject().apply {
                             put("clientName", clientConfig.clientName)
-                            put("clientVersion", clientConfig.clientVersion)
+                            val version = if (!scrapedClientVersion.isNullOrBlank() && (clientConfig.clientName.contains("WEB") || clientConfig.clientName.contains("TV"))) {
+                                scrapedClientVersion!!
+                            } else {
+                                clientConfig.clientVersion
+                            }
+                            put("clientVersion", version)
                             put("hl", "en")
                             put("gl", "US")
                         })
                     })
                     put("videoId", videoId)
+                    put("playbackContext", JSONObject().apply {
+                        put("contentPlaybackContext", JSONObject().apply {
+                            put("signatureTimestamp", 19886)
+                        })
+                    })
                 }
 
+                val apiKey = if (clientConfig.clientName.contains("MUSIC") || clientConfig.clientName.contains("ANDROID")) {
+                    com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_MUSIC
+                } else {
+                    scrapedApiKey ?: com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_WEB
+                }
+                val playerUrl = "https://www.youtube.com/youtubei/v1/player?key=$apiKey"
+
                 val request = Request.Builder()
-                    .url(FloWaveConstants.INNERTUBE_PLAYER_URL)
+                    .url(playerUrl)
                     .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
                     .header("User-Agent", clientConfig.userAgent)
                     .build()
 
                 val response = executeWithRetry(request, maxRetries = 2)
                 val bodyString = response.body?.string() ?: ""
+                println("[TEST-LOG] Client ${clientConfig.clientName} returned code: ${response.code}, body length: ${bodyString.length}")
+                if (!response.isSuccessful || bodyString.isEmpty() || bodyString.length < 5000) {
+                    println("[TEST-LOG] Body for ${clientConfig.clientName}: $bodyString")
+                }
                 if (response.isSuccessful && bodyString.isNotEmpty()) {
                     val json = JSONObject(bodyString)
                     val streamingData = json.optJSONObject("streamingData")
@@ -356,7 +429,14 @@ class InnerTubeRepository {
                         val extractedUrl = parseAudioUrl(adaptiveFormats)
                         if (extractedUrl != null) {
                             android.util.Log.d("FloWaveInnerTube", "Stream served by InnerTube client: ${clientConfig.clientName}")
+                            println("[TEST-LOG] Stream served by InnerTube client: ${clientConfig.clientName} for videoId: $videoId")
                             streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
+                            val videoDetails = json.optJSONObject("videoDetails")
+                            val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
+                            val durationSec = lengthSecondsStr?.toLongOrNull()
+                            if (durationSec != null) {
+                                streamDurationCache[videoId] = durationSec * 1000L
+                            }
                             response.close()
                             return@withContext extractedUrl
                         }
@@ -369,11 +449,11 @@ class InnerTubeRepository {
         }
 
         // Piped Public API Fallback Stream Extraction
-        for (instance in FloWaveConstants.PIPED_STREAM_INSTANCES) {
+        for (instance in com.example.flowave.utils.FloWaveConstants.PIPED_STREAM_INSTANCES) {
             try {
                 val request = Request.Builder()
                     .url("$instance$videoId")
-                    .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+                    .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
                     .build()
                 fastClient.newCall(request).execute().use { response ->
                     val bodyString = response.body?.string() ?: ""
@@ -394,14 +474,46 @@ class InnerTubeRepository {
                             }
                             if (bestPipedUrl != null) {
                                 android.util.Log.d("FloWaveInnerTube", "Stream served by Piped instance: $instance")
+                                println("[TEST-LOG] Stream served by Piped instance: $instance for videoId: $videoId")
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), bestPipedUrl)
                                 return@withContext bestPipedUrl
                             }
                         }
+                    } else {
+                        println("[TEST-LOG] Piped instance $instance returned code: ${response.code}")
                     }
                 }
             } catch (e: Exception) {
+                println("[TEST-LOG] Piped extraction failed for $instance: ${e.message}")
                 android.util.Log.w("FloWaveInnerTube", "Piped extraction failed for $instance: ${e.message}", e)
+            }
+        }
+
+        // Invidious Direct Fallback Stream Extraction
+        for (searchInstance in com.example.flowave.utils.FloWaveConstants.INVIDIOUS_SEARCH_INSTANCES) {
+            try {
+                val baseUrl = if (searchInstance.contains("api/v1/")) {
+                    searchInstance.substringBefore("api/v1/")
+                } else {
+                    searchInstance
+                }
+                val testUrl = "${baseUrl}latest_version?id=$videoId&itag=140"
+                val request = Request.Builder()
+                    .url(testUrl)
+                    .head()
+                    .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
+                    .build()
+                fastClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful || response.code in 300..399) {
+                        println("[TEST-LOG] Stream served by Invidious direct instance: $baseUrl for videoId: $videoId")
+                        streamUrlCache[videoId] = Pair(System.currentTimeMillis(), testUrl)
+                        return@withContext testUrl
+                    } else {
+                        println("[TEST-LOG] Invidious instance $baseUrl returned code: ${response.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                println("[TEST-LOG] Invidious extraction failed for $searchInstance: ${e.message}")
             }
         }
 
@@ -620,5 +732,66 @@ class InnerTubeRepository {
                 album = "Cybernetic Beats"
             )
         )
+    }
+
+    private fun extractAndCacheKeys(html: String) {
+        try {
+            val apiKeyRegex = Regex("(?i)\"INNERTUBE_API_KEY\"\\s*:\\s*\"([^\"]+)\"")
+            val apiKeyMatch = apiKeyRegex.find(html)
+            val apiKey = apiKeyMatch?.groupValues?.get(1)
+
+            val clientVersionRegex = Regex("(?i)\"(?:INNERTUBE_CONTEXT_CLIENT_VERSION|clientVersion)\"\\s*:\\s*\"([^\"]+)\"")
+            val clientVersionMatch = clientVersionRegex.find(html)
+            val clientVersion = clientVersionMatch?.groupValues?.get(1)
+
+            if (!apiKey.isNullOrBlank()) {
+                scrapedApiKey = apiKey
+                android.util.Log.d("InnerTubeRepository", "Successfully scraped INNERTUBE_API_KEY: $apiKey")
+                println("[TEST-LOG] Scraped INNERTUBE_API_KEY: $apiKey")
+            }
+            if (!clientVersion.isNullOrBlank()) {
+                scrapedClientVersion = clientVersion
+                android.util.Log.d("InnerTubeRepository", "Successfully scraped clientVersion: $clientVersion")
+                println("[TEST-LOG] Scraped clientVersion: $clientVersion")
+            }
+
+            if (!apiKey.isNullOrBlank() || !clientVersion.isNullOrBlank()) {
+                lastScrapedTimeMs = System.currentTimeMillis()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("InnerTubeRepository", "Error extracting keys from HTML: ${e.message}")
+        }
+    }
+
+    suspend fun ensureKeysUpdated() = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        if (scrapedApiKey != null && scrapedClientVersion != null && (now - lastScrapedTimeMs) < 24 * 60 * 60 * 1000L) {
+            return@withContext
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("https://www.youtube.com/")
+                .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .build()
+            client.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: ""
+                if (response.isSuccessful && html.isNotEmpty()) {
+                    extractAndCacheKeys(html)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("InnerTubeRepository", "Proactive key scraping failed: ${e.message}")
+        }
+    }
+
+    companion object {
+        @Volatile
+        var scrapedApiKey: String? = null
+        @Volatile
+        var scrapedClientVersion: String? = null
+        @Volatile
+        var lastScrapedTimeMs: Long = 0L
     }
 }

@@ -33,7 +33,7 @@ class FloWaveMediaService : MediaSessionService() {
                     .build()
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveMediaService", "Error initializing MediaSession", e)
         }
     }
 
@@ -53,7 +53,7 @@ class FloWaveMediaService : MediaSessionService() {
             }
             mediaSession = null
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("FloWaveMediaService", "Error releasing MediaSession in onDestroy", e)
         }
         super.onDestroy()
     }
