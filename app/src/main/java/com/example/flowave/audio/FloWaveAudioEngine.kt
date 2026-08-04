@@ -22,6 +22,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import com.example.flowave.data.model.Track
+import androidx.room.withTransaction
 import com.example.flowave.data.remote.InnerTubeRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -125,23 +126,24 @@ class FloWaveAudioEngine(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 val state = _playbackState.value
-                queueDao.clearQueueItems()
-                val queueItems = state.queue.mapIndexed { index, track ->
-                    trackDao.insertTrack(track)
-                    com.example.flowave.data.model.QueueItem(trackId = track.id, orderIndex = index)
-                }
-                queueDao.insertQueueItems(queueItems)
-                
                 val currentIdx = state.currentQueueIndex
                 val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
-                queueDao.saveQueueState(
-                    com.example.flowave.data.model.QueueState(
-                        currentQueueIndex = currentIdx,
-                        currentPositionMs = position,
-                        repeatMode = state.repeatMode,
-                        isShuffleEnabled = state.isShuffleEnabled
+                db.withTransaction {
+                    queueDao.clearQueueItems()
+                    trackDao.insertTracks(state.queue)
+                    val queueItems = state.queue.mapIndexed { index, track ->
+                        com.example.flowave.data.model.QueueItem(trackId = track.id, orderIndex = index)
+                    }
+                    queueDao.insertQueueItems(queueItems)
+                    queueDao.saveQueueState(
+                        com.example.flowave.data.model.QueueState(
+                            currentQueueIndex = currentIdx,
+                            currentPositionMs = position,
+                            repeatMode = state.repeatMode,
+                            isShuffleEnabled = state.isShuffleEnabled
+                        )
                     )
-                )
+                }
             } catch (e: Exception) {
                 android.util.Log.e("FloWaveAudioEngine", "Failed to persist queue: ${e.message}")
             }

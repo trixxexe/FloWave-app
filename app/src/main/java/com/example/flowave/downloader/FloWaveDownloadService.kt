@@ -19,6 +19,7 @@ class FloWaveDownloadService : Service() {
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
     private lateinit var downloadEngine: SealStyleDownloadEngine
+    private val activeDownloads = java.util.concurrent.atomic.AtomicInteger(0)
 
     override fun onCreate() {
         super.onCreate()
@@ -29,9 +30,13 @@ class FloWaveDownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val targetUrl = intent?.getStringExtra(EXTRA_URL) ?: return START_NOT_STICKY
+        val targetUrl = intent?.getStringExtra(EXTRA_URL) ?: run {
+            if (activeDownloads.get() == 0) stopSelf(startId)
+            return START_NOT_STICKY
+        }
         val outputDir = File(getExternalFilesDir(null), "FloWaveDownloads")
 
+        activeDownloads.incrementAndGet()
         val initialNotification = buildNotification("Initializing download...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -40,26 +45,32 @@ class FloWaveDownloadService : Service() {
         }
 
         serviceScope.launch {
-            downloadEngine.executeDownload(targetUrl, outputDir).collect { state ->
-                when (state) {
-                    is DownloadState.Downloading -> {
-                        val text = "${state.progress.toInt()}% at ${state.speed} (ETA: ${state.eta})"
-                        updateNotification(text, state.progress.toInt())
+            try {
+                downloadEngine.executeDownload(targetUrl, outputDir).collect { state ->
+                    when (state) {
+                        is DownloadState.Downloading -> {
+                            val text = "${state.progress.toInt()}% at ${state.speed} (ETA: ${state.eta})"
+                            updateNotification(text, state.progress.toInt())
+                        }
+                        is DownloadState.PostProcessing -> {
+                            updateNotification(state.step, 100)
+                        }
+                        is DownloadState.Success -> {
+                            updateNotification("Download finished successfully!", 100)
+                        }
+                        is DownloadState.Error -> {
+                            updateNotification("Error: ${state.message}", 0)
+                        }
+                        else -> {}
                     }
-                    is DownloadState.PostProcessing -> {
-                        updateNotification(state.step, 100)
-                    }
-                    is DownloadState.Success -> {
-                        updateNotification("Download finished successfully!", 100)
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                        stopSelf()
-                    }
-                    is DownloadState.Error -> {
-                        updateNotification("Error: ${state.message}", 0)
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                        stopSelf()
-                    }
-                    else -> {}
+                }
+            } finally {
+                val remaining = activeDownloads.decrementAndGet()
+                if (remaining <= 0) {
+                    stopForeground(STOP_FOREGROUND_DETACH)
+                    stopSelf(startId)
+                } else {
+                    stopSelf(startId)
                 }
             }
         }

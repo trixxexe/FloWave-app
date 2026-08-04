@@ -234,7 +234,6 @@ class InnerTubeRepository {
                 tracks.addAll(parsed)
                 if (parsed.isNotEmpty()) {
                     android.util.Log.d("InnerTubeRepository", "Search results fetched from Engine 1 (Official InnerTube Search) for query: $query")
-                    println("[TEST-LOG] Search results fetched from Engine 1 (Official InnerTube Search) for query: $query")
                 }
             }
             response.close()
@@ -506,10 +505,6 @@ class InnerTubeRepository {
 
                 executeWithRetry(request, maxRetries = 2).use { response ->
                     val bodyString = response.body?.string() ?: ""
-                    println("[TEST-LOG] Client ${clientConfig.clientName} returned code: ${response.code}, body length: ${bodyString.length}")
-                    if (!response.isSuccessful || bodyString.isEmpty() || bodyString.length < 5000) {
-                        println("[TEST-LOG] Body for ${clientConfig.clientName}: $bodyString")
-                    }
                     if (response.isSuccessful && bodyString.isNotEmpty()) {
                         val json = JSONObject(bodyString)
                         val streamingData = json.optJSONObject("streamingData")
@@ -520,7 +515,6 @@ class InnerTubeRepository {
                             val extractedUrl = parseAudioUrl(adaptiveFormats)
                             if (extractedUrl != null) {
                                 android.util.Log.d("FloWaveInnerTube", "Stream served by InnerTube client: ${clientConfig.clientName}")
-                                println("[TEST-LOG] Stream served by InnerTube client: ${clientConfig.clientName} for videoId: $videoId")
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
                                 val videoDetails = json.optJSONObject("videoDetails")
                                 val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
@@ -564,17 +558,13 @@ class InnerTubeRepository {
                             }
                             if (bestPipedUrl != null) {
                                 android.util.Log.d("FloWaveInnerTube", "Stream served by Piped instance: $instance")
-                                println("[TEST-LOG] Stream served by Piped instance: $instance for videoId: $videoId")
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), bestPipedUrl)
                                 return@withContext bestPipedUrl
                             }
                         }
-                    } else {
-                        println("[TEST-LOG] Piped instance $instance returned code: ${response.code}")
                     }
                 }
             } catch (e: Exception) {
-                println("[TEST-LOG] Piped extraction failed for $instance: ${e.message}")
                 android.util.Log.w("FloWaveInnerTube", "Piped extraction failed for $instance: ${e.message}", e)
             }
         }
@@ -595,15 +585,13 @@ class InnerTubeRepository {
                     .build()
                 fastClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful || response.code in 300..399) {
-                        println("[TEST-LOG] Stream served by Invidious direct instance: $baseUrl for videoId: $videoId")
+                        android.util.Log.d("FloWaveInnerTube", "Stream served by Invidious instance: $baseUrl")
                         streamUrlCache[videoId] = Pair(System.currentTimeMillis(), testUrl)
                         return@withContext testUrl
-                    } else {
-                        println("[TEST-LOG] Invidious instance $baseUrl returned code: ${response.code}")
                     }
                 }
             } catch (e: Exception) {
-                println("[TEST-LOG] Invidious extraction failed for $searchInstance: ${e.message}")
+                android.util.Log.w("FloWaveInnerTube", "Invidious extraction failed for $searchInstance: ${e.message}")
             }
         }
 
@@ -849,13 +837,11 @@ class InnerTubeRepository {
 
             if (!apiKey.isNullOrBlank()) {
                 scrapedApiKey = apiKey
-                android.util.Log.d("InnerTubeRepository", "Successfully scraped INNERTUBE_API_KEY: $apiKey")
-                println("[TEST-LOG] Scraped INNERTUBE_API_KEY: $apiKey")
+                android.util.Log.d("InnerTubeRepository", "Successfully refreshed INNERTUBE_API_KEY")
             }
             if (!clientVersion.isNullOrBlank()) {
                 scrapedClientVersion = clientVersion
-                android.util.Log.d("InnerTubeRepository", "Successfully scraped clientVersion: $clientVersion")
-                println("[TEST-LOG] Scraped clientVersion: $clientVersion")
+                android.util.Log.d("InnerTubeRepository", "Successfully refreshed clientVersion: $clientVersion")
             }
 
             if (!apiKey.isNullOrBlank() || !clientVersion.isNullOrBlank()) {
