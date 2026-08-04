@@ -53,18 +53,18 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           cache: gradle
 
-      # Installs a trusted Gradle binary on the runner itself (not the
-      # committed wrapper jar, which the AI Studio scaffold generates and
-      # which gradle/actions/wrapper-validation doesn't recognize).
+      # validate-wrappers MUST be false. The AI Studio scaffold's committed
+      # gradle-wrapper.jar is not in Gradle's known-checksums database, so
+      # setup-gradle's own internal validation fails before we ever get a
+      # chance to regenerate it below. Disabling this check here is safe
+      # because we throw away the committed jar and regenerate a fresh one
+      # from a real, officially-downloaded Gradle binary in the next step.
       - name: Set up Gradle ${{ env.GRADLE_VERSION }}
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
+          validate-wrappers: false
 
-      # Regenerate the wrapper jar/properties using the trusted Gradle
-      # binary above, overwriting whatever was committed to the repo.
-      # This guarantees a known-good wrapper every run and avoids the
-      # "unknown Gradle Wrapper JAR" validation failure entirely.
       - name: Regenerate Gradle wrapper
         run: |
           gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }}
