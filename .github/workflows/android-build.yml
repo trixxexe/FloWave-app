@@ -39,7 +39,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
-          wrapper-validation-enabled: false
+          validate-wrappers: false
 
       - name: Install Android SDK components (API 36 / build-tools 36.0.0)
         run: |

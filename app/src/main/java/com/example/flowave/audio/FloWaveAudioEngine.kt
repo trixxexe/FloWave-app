@@ -456,36 +456,41 @@ class FloWaveAudioEngine(private val context: Context) {
 
     @OptIn(UnstableApi::class)
     private fun setupAudioEffects(audioSessionId: Int) {
-        if (audioSessionId == C.AUDIO_SESSION_ID_UNSET) return
+        if (audioSessionId == C.AUDIO_SESSION_ID_UNSET || audioSessionId == 0) return
         
         try {
             equalizer = Equalizer(0, audioSessionId).apply { enabled = true }
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize Equalizer: ${e.message}", e)
+        } catch (t: Throwable) {
+            android.util.Log.w("FloWaveAudioEngine", "Equalizer not available: ${t.message}")
+            equalizer = null
         }
         
         try {
             bassBoost = BassBoost(0, audioSessionId).apply { enabled = true }
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize BassBoost: ${e.message}", e)
+        } catch (t: Throwable) {
+            android.util.Log.w("FloWaveAudioEngine", "BassBoost not available: ${t.message}")
+            bassBoost = null
         }
         
         try {
             virtualizer = Virtualizer(0, audioSessionId).apply { enabled = true }
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize Virtualizer: ${e.message}", e)
+        } catch (t: Throwable) {
+            android.util.Log.w("FloWaveAudioEngine", "Virtualizer not available: ${t.message}")
+            virtualizer = null
         }
         
         try {
             loudnessEnhancer = LoudnessEnhancer(audioSessionId).apply { enabled = true }
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize LoudnessEnhancer: ${e.message}", e)
+        } catch (t: Throwable) {
+            android.util.Log.w("FloWaveAudioEngine", "LoudnessEnhancer not available: ${t.message}")
+            loudnessEnhancer = null
         }
         
         try {
             presetReverb = PresetReverb(0, audioSessionId).apply { enabled = true }
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Failed to initialize PresetReverb: ${e.message}", e)
+        } catch (t: Throwable) {
+            android.util.Log.w("FloWaveAudioEngine", "PresetReverb not available: ${t.message}")
+            presetReverb = null
         }
     }
 
