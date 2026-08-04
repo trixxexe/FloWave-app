@@ -25,8 +25,8 @@ This repository is pre-configured with a automated **GitHub Actions Workflow** (
 
 ### Requirements
 - **JDK**: Java 17 or higher
-- **Android SDK**: API 34 (Android 14)
-- **Gradle**: 8.7+
+- **Android SDK**: API 36 (Android 16) with build-tools 36.0.0
+- **Gradle**: 9.3.1 (required by AGP 9.1.1)
 
 ### Commands
 ```bash

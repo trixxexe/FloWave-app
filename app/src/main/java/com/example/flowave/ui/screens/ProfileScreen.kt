@@ -736,8 +736,9 @@ fun ProfileScreen(
     }
 
     // Dynamic Choice Dialog selector
-    if (activeChoiceDef != null) {
-        val def = activeChoiceDef!!
+    val currentChoice = activeChoiceDef
+    if (currentChoice != null) {
+        val def = currentChoice
         val currentValue = SettingsSchema.getValue(settingsJson, def.key)
         AlertDialog(
             onDismissRequest = { activeChoiceDef = null },
@@ -783,8 +784,9 @@ fun ProfileScreen(
     }
 
     // Dynamic Custom String Input Dialog selector
-    if (activeStringDef != null) {
-        val def = activeStringDef!!
+    val currentString = activeStringDef
+    if (currentString != null) {
+        val def = currentString
         var textInput by remember { mutableStateOf(SettingsSchema.getValue(settingsJson, def.key)) }
         AlertDialog(
             onDismissRequest = { activeStringDef = null },

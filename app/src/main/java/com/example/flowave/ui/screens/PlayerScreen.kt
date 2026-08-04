@@ -432,14 +432,14 @@ fun PlayerScreen(
             ) {
                 TextButton(onClick = { audioEngine.setPointA() }) {
                     Text(
-                        text = if (playbackState.pointA != null) "A: ${formatMs(playbackState.pointA!!)}" else "Set A",
+                        text = playbackState.pointA?.let { "A: ${formatMs(it)}" } ?: "Set A",
                         color = if (playbackState.pointA != null) CyanNeon else TextMuted,
                         fontSize = 11.sp
                     )
                 }
                 TextButton(onClick = { audioEngine.setPointB() }) {
                     Text(
-                        text = if (playbackState.pointB != null) "B: ${formatMs(playbackState.pointB!!)}" else "Set B",
+                        text = playbackState.pointB?.let { "B: ${formatMs(it)}" } ?: "Set B",
                         color = if (playbackState.pointB != null) CyanNeon else TextMuted,
                         fontSize = 11.sp
                     )

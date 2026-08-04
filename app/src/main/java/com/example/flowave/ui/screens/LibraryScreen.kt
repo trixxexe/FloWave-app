@@ -205,7 +205,7 @@ fun LibraryScreen(
                         }
                     } else {
                         // Navigating Inside Folder
-                        val currentPath = selectedFolder!!
+                        val currentPath = selectedFolder ?: ""
                         val rawTracks = localTracks.filter { it.folderPath == currentPath }
                         val folderTracks = if (folderSortBy == "Title") {
                             rawTracks.sortedBy { it.title.lowercase() }

@@ -30,16 +30,67 @@ import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.data.repository.FloWaveRepository
 import com.example.flowave.data.repository.ProfileRepository
 import com.example.flowave.downloader.FloWaveDownloader
+import com.example.flowave.downloader.FloWaveDownloadService
 import com.example.flowave.ui.components.DynamicIslandWidget
 import com.example.flowave.ui.components.MiniPlayer
 import com.example.flowave.ui.components.PermissionManager
-import com.example.flowave.ui.components.PermissionsDialog
 import com.example.flowave.ui.components.TagEditorDialog
 import com.example.flowave.ui.screens.*
 import com.example.flowave.ui.theme.*
 import com.example.flowave.utils.SettingsSchema
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.TimeoutCancellationException
+import android.content.Context
+import java.io.IOException
+import kotlinx.coroutines.CoroutineScope
+
+private suspend fun playOnlineTrack(
+    online: InnerTubeTrack,
+    context: Context,
+    audioEngine: FloWaveAudioEngine,
+    innerTubeRepo: InnerTubeRepository,
+    coroutineScope: CoroutineScope
+) {
+    try {
+        Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
+        val url = try {
+            withTimeoutOrNull(10000L) {
+                innerTubeRepo.getStreamUrl(online.id)
+            } ?: throw IOException("Stream URL resolution timed out")
+        } catch (e: Exception) {
+            Toast.makeText(context, "Failed to resolve stream: ${e.message}", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (url.isBlank() || !url.startsWith("http")) {
+            Toast.makeText(context, "Received invalid stream URL", Toast.LENGTH_LONG).show()
+            return
+        }
+        val cachedDuration = innerTubeRepo.getCachedDuration(online.id)
+        val finalDuration = if (cachedDuration > 0L) {
+            cachedDuration
+        } else {
+            innerTubeRepo.parseDurationText(online.durationText).coerceAtLeast(10000L)
+        }
+        val track = Track(
+            id = "yt_${online.id}",
+            title = online.title,
+            artist = online.artist,
+            album = if (online.album.isNotEmpty()) online.album else "Online Stream",
+            durationMs = finalDuration,
+            mediaUri = url,
+            artworkUri = online.thumbnailUrl,
+            isOnline = true,
+            source = "YOUTUBE"
+        )
+        audioEngine.playTrack(track)
+    } catch (e: TimeoutCancellationException) {
+        Toast.makeText(context, "Stream resolution timed out", Toast.LENGTH_LONG).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Error: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+    }
+}
 
 @Composable
 fun MainScreen() {
@@ -61,7 +112,12 @@ fun MainScreen() {
 
     var featuredOnlineTracks by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var searchOnlineResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
+    var downloaderSearchResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
+    var isDownloaderSearching by remember { mutableStateOf(false) }
     var currentLrcLines by remember { mutableStateOf<List<LrcLine>>(emptyList()) }
+
+    var showCrashReportDialog by remember { mutableStateOf(false) }
+    var crashReportContent by remember { mutableStateOf("") }
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Home, 1: Explore, 2: Library, 3: Downloader, 4: EQ DSP, 5: Profile
     var isPlayerExpanded by remember { mutableStateOf(false) }
@@ -93,12 +149,22 @@ fun MainScreen() {
 
     // Fetch initial trending tracks
     LaunchedEffect(Unit) {
+        innerTubeRepo.ensureKeysUpdated()
         try {
             featuredOnlineTracks = innerTubeRepo.getFeaturedAudioStreams()
         } catch (e: Exception) {
             e.printStackTrace()
         }
         repository.scanMediaStore()
+
+        // Check for previous crashes
+        if (com.example.flowave.utils.FloWaveCrashHandler.hasCrashReport(context)) {
+            val report = com.example.flowave.utils.FloWaveCrashHandler.getCrashReport(context)
+            if (!report.isNullOrBlank()) {
+                crashReportContent = report
+                showCrashReportDialog = true
+            }
+        }
     }
 
     val currentTrack = playbackState.currentTrack
@@ -314,26 +380,7 @@ fun MainScreen() {
                         onTrackClick = { track -> audioEngine.playTrack(track) },
                         onOnlineTrackClick = { online ->
                             coroutineScope.launch {
-                                try {
-                                    Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
-                                    val url = innerTubeRepo.getStreamUrl(online.id)
-                                    val cachedDuration = innerTubeRepo.getCachedDuration(online.id)
-                                    val finalDuration = if (cachedDuration > 0L) cachedDuration else innerTubeRepo.parseDurationText(online.durationText)
-                                    val track = Track(
-                                        id = "yt_${online.id}",
-                                        title = online.title,
-                                        artist = online.artist,
-                                        album = if (online.album.isNotEmpty()) online.album else "Online Stream",
-                                        durationMs = finalDuration,
-                                        mediaUri = url,
-                                        artworkUri = online.thumbnailUrl,
-                                        isOnline = true,
-                                        source = "YOUTUBE"
-                                    )
-                                    audioEngine.playTrack(track)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Error fetching stream: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
+                                playOnlineTrack(online, context, audioEngine, innerTubeRepo, coroutineScope)
                             }
                         },
                         onProfileClick = { selectedTab = 5 },
@@ -363,26 +410,7 @@ fun MainScreen() {
                         onTrackClick = { track -> audioEngine.playTrack(track) },
                         onOnlineTrackClick = { online ->
                             coroutineScope.launch {
-                                try {
-                                    Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
-                                    val url = innerTubeRepo.getStreamUrl(online.id)
-                                    val cachedDuration = innerTubeRepo.getCachedDuration(online.id)
-                                    val finalDuration = if (cachedDuration > 0L) cachedDuration else innerTubeRepo.parseDurationText(online.durationText)
-                                    val track = Track(
-                                        id = "yt_${online.id}",
-                                        title = online.title,
-                                        artist = online.artist,
-                                        album = if (online.album.isNotEmpty()) online.album else "Online Stream",
-                                        durationMs = finalDuration,
-                                        mediaUri = url,
-                                        artworkUri = online.thumbnailUrl,
-                                        isOnline = true,
-                                        source = "YOUTUBE"
-                                    )
-                                    audioEngine.playTrack(track)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Error fetching stream: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
+                                playOnlineTrack(online, context, audioEngine, innerTubeRepo, coroutineScope)
                             }
                         },
                         onDownloadOnlineTrack = { online ->
@@ -427,31 +455,34 @@ fun MainScreen() {
 
                     3 -> DownloaderScreen(
                         downloadEntries = downloadEntries,
-                        searchResults = searchOnlineResults,
-                        onSearchKeyword = { query ->
-                            coroutineScope.launch {
-                                try {
-                                    searchOnlineResults = innerTubeRepo.searchTracks(query)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Search failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        searchResults = downloaderSearchResults,
+                        onSearchKeyword = { keyword ->
+                            if (keyword.isNotBlank()) {
+                                coroutineScope.launch {
+                                    isDownloaderSearching = true
+                                    downloaderSearchResults = try {
+                                        innerTubeRepo.searchTracks(keyword.trim())
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("MainScreen", "Downloader search failed: ${e.message}")
+                                        emptyList()
+                                    } finally {
+                                        isDownloaderSearching = false
+                                    }
                                 }
+                            } else {
+                                downloaderSearchResults = emptyList()
                             }
                         },
-                        onDownloadTrack = { online ->
-                            coroutineScope.launch {
-                                try {
-                                    Toast.makeText(context, "Extracting audio: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    val streamUrl = innerTubeRepo.getStreamUrl(online.id)
-                                    downloader.downloadAudioTrack(online, streamUrl)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                        onDownloadTrack = { track ->
+                            coroutineScope.launch { downloader.startDownload(track) }
                         },
                         onStartUrlDownload = { url ->
-                            coroutineScope.launch {
-                                val dummyTrack = InnerTubeTrack("url_dl_${System.currentTimeMillis()}", "Extracted Stream", "Direct FloWave", "3:45", "")
-                                downloader.downloadAudioTrack(dummyTrack, url)
+                            val intent = android.content.Intent(context, FloWaveDownloadService::class.java)
+                            intent.putExtra(FloWaveDownloadService.EXTRA_URL, url)
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                context.startForegroundService(intent)
+                            } else {
+                                context.startService(intent)
                             }
                         },
                         onBackClick = { selectedTab = 0 }
@@ -547,6 +578,70 @@ fun MainScreen() {
                     }
                     editingTrack = null
                 }
+            )
+        }
+
+        // App Recovery Diagnostics Dialog
+        if (showCrashReportDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    com.example.flowave.utils.FloWaveCrashHandler.clearCrashReport(context)
+                    showCrashReportDialog = false
+                },
+                title = {
+                    Text("App Recovery Diagnostics", color = PinkNeon, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                },
+                text = {
+                    Column {
+                        Text("It looks like FloWave closed unexpectedly during your last session. Our recovery module captured a diagnosis log to assist debugging:", color = TextPrimary, fontSize = 13.sp)
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                item {
+                                    Text(
+                                        text = crashReportContent,
+                                        color = TextPrimary,
+                                        fontSize = 11.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            com.example.flowave.utils.FloWaveCrashHandler.clearCrashReport(context)
+                            showCrashReportDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack)
+                    ) {
+                        Text("Acknowledge & Clear", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, crashReportContent)
+                                putExtra(android.content.Intent.EXTRA_SUBJECT, "FloWave Crash Report")
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "Share Crash Report via"))
+                        }
+                    ) {
+                        Text("Share Diagnostic", color = CyanNeon)
+                    }
+                },
+                containerColor = DarkSurface,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
             )
         }
     }

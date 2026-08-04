@@ -14,5 +14,7 @@ data class QueueItem(
 data class QueueState(
     @PrimaryKey val id: Int = 1,
     val currentQueueIndex: Int,
-    val currentPositionMs: Long
+    val currentPositionMs: Long,
+    val repeatMode: Int = 0,
+    val isShuffleEnabled: Boolean = false
 )

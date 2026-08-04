@@ -35,7 +35,7 @@ class FloWaveDataSourceFactory(
                 } else {
                     defaultDataSource
                 }
-                return activeDataSource!!.open(dataSpec)
+                return activeDataSource?.open(dataSpec) ?: -1L
             }
 
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {

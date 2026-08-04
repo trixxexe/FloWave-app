@@ -11,8 +11,8 @@ class FloWaveMediaService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
 
-    override fun onCreate() {
-        super.onCreate()
+    private fun initializeMediaSession() {
+        if (mediaSession != null) return
         try {
             val audioEngine = FloWaveAudioEngine.getInstance(this)
             audioEngine.player?.let { exoPlayer ->
@@ -31,10 +31,16 @@ class FloWaveMediaService : MediaSessionService() {
                         }
                     })
                     .build()
+                android.util.Log.d("FloWaveMediaService", "MediaSession successfully initialized.")
             }
         } catch (e: Exception) {
             android.util.Log.e("FloWaveMediaService", "Error initializing MediaSession", e)
         }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        initializeMediaSession()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -43,6 +49,9 @@ class FloWaveMediaService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
+        if (mediaSession == null) {
+            initializeMediaSession()
+        }
         return mediaSession
     }
 

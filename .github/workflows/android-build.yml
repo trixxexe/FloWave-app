@@ -49,10 +49,8 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0" || true
 
-      - name: Ensure Gradle wrapper is on 9.3.1
-        run: |
-          gradle wrapper --gradle-version 9.3.1
-          chmod +x ./gradlew
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
 
       - name: Create default .env file
         run: |
@@ -71,7 +69,6 @@ jobs:
 
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
-        continue-on-error: true
 
       - name: Run lint
         run: ./gradlew lintDebug --stacktrace

@@ -90,6 +90,8 @@ class FloWaveAudioEngine(private val context: Context) {
 
     private var wasPlayingBeforeDisconnect = false
     private var connectivityManager: android.net.ConnectivityManager? = null
+    private val trackRetryCount = mutableMapOf<String, Int>()
+    private var lastErrorToastTime = 0L
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
 
     private val _playbackState = MutableStateFlow(PlaybackState())
@@ -104,6 +106,14 @@ class FloWaveAudioEngine(private val context: Context) {
 
     private var progressJob: Job? = null
     private var playerListener: Player.Listener? = null
+
+    private fun updatePlaybackState(block: (PlaybackState) -> PlaybackState) {
+        _playbackState.value = block(_playbackState.value)
+    }
+
+    private fun updateEqualizerState(block: (EqualizerState) -> EqualizerState) {
+        _equalizerState.value = block(_equalizerState.value)
+    }
 
     init {
         initPlayer()
@@ -124,7 +134,14 @@ class FloWaveAudioEngine(private val context: Context) {
                 
                 val currentIdx = state.currentQueueIndex
                 val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
-                queueDao.saveQueueState(com.example.flowave.data.model.QueueState(currentQueueIndex = currentIdx, currentPositionMs = position))
+                queueDao.saveQueueState(
+                    com.example.flowave.data.model.QueueState(
+                        currentQueueIndex = currentIdx,
+                        currentPositionMs = position,
+                        repeatMode = state.repeatMode,
+                        isShuffleEnabled = state.isShuffleEnabled
+                    )
+                )
             } catch (e: Exception) {
                 android.util.Log.e("FloWaveAudioEngine", "Failed to persist queue: ${e.message}")
             }
@@ -137,7 +154,14 @@ class FloWaveAudioEngine(private val context: Context) {
                 val state = _playbackState.value
                 val currentIdx = state.currentQueueIndex
                 val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
-                queueDao.saveQueueState(com.example.flowave.data.model.QueueState(currentQueueIndex = currentIdx, currentPositionMs = position))
+                queueDao.saveQueueState(
+                    com.example.flowave.data.model.QueueState(
+                        currentQueueIndex = currentIdx,
+                        currentPositionMs = position,
+                        repeatMode = state.repeatMode,
+                        isShuffleEnabled = state.isShuffleEnabled
+                    )
+                )
             } catch (e: Exception) {
                 // Ignore transient write errors
             }
@@ -161,7 +185,9 @@ class FloWaveAudioEngine(private val context: Context) {
                             queue = tracks,
                             currentQueueIndex = dbState.currentQueueIndex,
                             currentTrack = tracks.getOrNull(dbState.currentQueueIndex),
-                            currentPositionMs = dbState.currentPositionMs
+                            currentPositionMs = dbState.currentPositionMs,
+                            repeatMode = dbState.repeatMode,
+                            isShuffleEnabled = dbState.isShuffleEnabled
                         )
                         
                         val mediaItems = tracks.mapNotNull { track -> createMediaItem(track) }
@@ -169,6 +195,8 @@ class FloWaveAudioEngine(private val context: Context) {
                         if (dbState.currentQueueIndex in tracks.indices) {
                             exoPlayer?.seekTo(dbState.currentQueueIndex, dbState.currentPositionMs)
                         }
+                        exoPlayer?.repeatMode = dbState.repeatMode
+                        exoPlayer?.shuffleModeEnabled = dbState.isShuffleEnabled
                         exoPlayer?.prepare()
                     }
                 }
@@ -251,44 +279,60 @@ class FloWaveAudioEngine(private val context: Context) {
 
                     override fun onPlayerError(error: PlaybackException) {
                         android.util.Log.e("FloWaveAudioEngine", "Player error encountered: ${error.message}", error)
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            android.widget.Toast.makeText(context, "Playback error: ${error.localizedMessage ?: error.message}", android.widget.Toast.LENGTH_LONG).show()
+                        
+                        val now = System.currentTimeMillis()
+                        if (now - lastErrorToastTime > 5000L) {
+                            lastErrorToastTime = now
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                android.widget.Toast.makeText(context, "Playback error: ${error.localizedMessage ?: error.message}", android.widget.Toast.LENGTH_LONG).show()
+                            }
                         }
+                        
                         val currentTrack = _playbackState.value.currentTrack
                         if (currentTrack != null && currentTrack.isOnline) {
+                            val retries = trackRetryCount.getOrDefault(currentTrack.id, 0)
                             val currentPos = _playbackState.value.currentPositionMs
-                            android.util.Log.w("FloWaveAudioEngine", "Playback error for online track: ${error.message}. Attempting to refresh URL and resume...")
-                            scope.launch {
-                                try {
-                                    // Fetch a fresh stream URL
-                                    val freshUrl = innerTubeRepo.getStreamUrl(currentTrack.id.replace("yt_", ""), forceRefresh = true)
-                                    val updatedTrack = currentTrack.copy(mediaUri = freshUrl)
-                                    
-                                    // Update track in queue
-                                    val updatedQueue = _playbackState.value.queue.map {
-                                        if (it.id == currentTrack.id) updatedTrack else it
+                            if (retries < 3) {
+                                trackRetryCount[currentTrack.id] = retries + 1
+                                val delayMs = (1000L * (1 shl retries)).coerceAtMost(8000L)
+                                android.util.Log.w("FloWaveAudioEngine", "Playback error for online track ${currentTrack.title} (retry ${retries + 1}/3). Delaying $delayMs ms then refreshing...")
+                                scope.launch {
+                                    delay(delayMs)
+                                    try {
+                                        // Fetch a fresh stream URL
+                                        val freshUrl = innerTubeRepo.getStreamUrl(currentTrack.id.replace("yt_", ""), forceRefresh = true)
+                                        val updatedTrack = currentTrack.copy(mediaUri = freshUrl)
+                                        
+                                        // Update track in queue
+                                        val updatedQueue = _playbackState.value.queue.map {
+                                            if (it.id == currentTrack.id) updatedTrack else it
+                                        }
+                                        _playbackState.value = _playbackState.value.copy(
+                                            queue = updatedQueue,
+                                            currentTrack = updatedTrack
+                                        )
+                                        
+                                        // Re-prepare and play
+                                        val mediaItem = createMediaItem(updatedTrack)
+                                        if (mediaItem != null) {
+                                            val curIndex = exoPlayer?.currentMediaItemIndex ?: 0
+                                            exoPlayer?.replaceMediaItem(curIndex, mediaItem)
+                                            exoPlayer?.prepare()
+                                            exoPlayer?.seekTo(curIndex, currentPos)
+                                            exoPlayer?.play()
+                                            android.util.Log.d("FloWaveAudioEngine", "Successfully refreshed URL and resumed playback!")
+                                            return@launch
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("FloWaveAudioEngine", "Failed to refresh expired URL mid-play: ${e.message}")
                                     }
-                                    _playbackState.value = _playbackState.value.copy(
-                                        queue = updatedQueue,
-                                        currentTrack = updatedTrack
-                                    )
                                     
-                                    // Re-prepare and play
-                                    val mediaItem = createMediaItem(updatedTrack)
-                                    if (mediaItem != null) {
-                                        val curIndex = exoPlayer?.currentMediaItemIndex ?: 0
-                                        exoPlayer?.replaceMediaItem(curIndex, mediaItem)
-                                        exoPlayer?.prepare()
-                                        exoPlayer?.seekTo(curIndex, currentPos)
-                                        exoPlayer?.play()
-                                        android.util.Log.d("FloWaveAudioEngine", "Successfully refreshed URL and resumed playback!")
-                                        return@launch
-                                    }
-                                } catch (e: Exception) {
-                                    android.util.Log.e("FloWaveAudioEngine", "Failed to refresh expired URL mid-play: ${e.message}")
+                                    // Fallback: skip if refresh fails
+                                    playNext()
                                 }
-                                
-                                // Fallback: skip if refresh fails
+                            } else {
+                                android.util.Log.e("FloWaveAudioEngine", "Max retries reached for track ${currentTrack.title}. Skipping to next track.")
+                                trackRetryCount.remove(currentTrack.id)
                                 playNext()
                             }
                         } else {
@@ -301,6 +345,7 @@ class FloWaveAudioEngine(private val context: Context) {
                     }
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        trackRetryCount.clear()
                         val index = exoPlayer?.currentMediaItemIndex ?: -1
                         val queue = _playbackState.value.queue
                         if (index in queue.indices) {
@@ -375,21 +420,22 @@ class FloWaveAudioEngine(private val context: Context) {
         }
         
         val info = getAudioFormatInfo(currentFormat)
-        _playbackState.value = _playbackState.value.copy(audioFormatInfo = info)
+        updatePlaybackState { it.copy(audioFormatInfo = info) }
     }
 
     @OptIn(UnstableApi::class)
     private fun getAudioFormatInfo(format: Format?): String {
         if (format == null) return "Analyzing Audio..."
+        val mime = format.sampleMimeType
         val codec = when {
-            format.sampleMimeType == null -> "Unknown"
-            format.sampleMimeType!!.contains("opus") -> "Opus"
-            format.sampleMimeType!!.contains("mp4a") || format.sampleMimeType!!.contains("aac") -> "AAC"
-            format.sampleMimeType!!.contains("mpeg") || format.sampleMimeType!!.contains("mp3") -> "MP3"
-            format.sampleMimeType!!.contains("flac") -> "FLAC"
-            format.sampleMimeType!!.contains("ogg") -> "Vorbis"
-            format.sampleMimeType!!.contains("webm") -> "WebM"
-            else -> format.sampleMimeType!!.substringAfter("audio/").uppercase()
+            mime == null -> "Unknown"
+            mime.contains("opus") -> "Opus"
+            mime.contains("mp4a") || mime.contains("aac") -> "AAC"
+            mime.contains("mpeg") || mime.contains("mp3") -> "MP3"
+            mime.contains("flac") -> "FLAC"
+            mime.contains("ogg") -> "Vorbis"
+            mime.contains("webm") -> "WebM"
+            else -> mime.substringAfter("audio/").uppercase()
         }
         
         val bitrateStr = if (format.bitrate != Format.NO_VALUE && format.bitrate > 0) {
@@ -561,6 +607,7 @@ class FloWaveAudioEngine(private val context: Context) {
         val newShuffle = !_playbackState.value.isShuffleEnabled
         exoPlayer?.shuffleModeEnabled = newShuffle
         _playbackState.value = _playbackState.value.copy(isShuffleEnabled = newShuffle)
+        persistQueueStateOnly()
     }
 
     fun toggleSmartShuffle() {
@@ -571,6 +618,7 @@ class FloWaveAudioEngine(private val context: Context) {
             isShuffleEnabled = newSmart
         )
         exoPlayer?.shuffleModeEnabled = newSmart
+        persistQueueStateOnly()
     }
 
     fun toggleRepeatMode() {
@@ -581,6 +629,7 @@ class FloWaveAudioEngine(private val context: Context) {
         }
         exoPlayer?.repeatMode = nextMode
         _playbackState.value = _playbackState.value.copy(repeatMode = nextMode)
+        persistQueueStateOnly()
     }
 
     // A-B Loop controls
@@ -843,7 +892,9 @@ class FloWaveAudioEngine(private val context: Context) {
                     }
                 }
             }
-            connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
+            networkCallback?.let { callback ->
+                connectivityManager?.registerDefaultNetworkCallback(callback)
+            }
         } catch (e: Exception) {
             android.util.Log.e("FloWaveAudioEngine", "Error registering network callback", e)
         }
@@ -885,17 +936,42 @@ class FloWaveAudioEngine(private val context: Context) {
 
         try {
             equalizer?.release()
-            equalizer = null
-            bassBoost?.release()
-            bassBoost = null
-            virtualizer?.release()
-            virtualizer = null
-            loudnessEnhancer?.release()
-            loudnessEnhancer = null
-            presetReverb?.release()
-            presetReverb = null
         } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Error releasing audio effects", e)
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing Equalizer", e)
+        } finally {
+            equalizer = null
+        }
+
+        try {
+            bassBoost?.release()
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing BassBoost", e)
+        } finally {
+            bassBoost = null
+        }
+
+        try {
+            virtualizer?.release()
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing Virtualizer", e)
+        } finally {
+            virtualizer = null
+        }
+
+        try {
+            loudnessEnhancer?.release()
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing LoudnessEnhancer", e)
+        } finally {
+            loudnessEnhancer = null
+        }
+
+        try {
+            presetReverb?.release()
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveAudioEngine", "Error releasing PresetReverb", e)
+        } finally {
+            presetReverb = null
         }
 
         // Release the audio SimpleCache

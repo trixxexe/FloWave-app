@@ -26,7 +26,7 @@ object FloWaveCacheManager {
             val databaseProvider = StandaloneDatabaseProvider(context.applicationContext)
             cacheInstance = SimpleCache(cacheDir, evictor, databaseProvider)
         }
-        return cacheInstance!!
+        return cacheInstance ?: throw IllegalStateException("Cache failed to initialize")
     }
 
     @Synchronized

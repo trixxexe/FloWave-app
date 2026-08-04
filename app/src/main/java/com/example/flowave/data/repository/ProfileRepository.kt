@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.flowave.data.model.UserProfile
 import com.example.flowave.utils.SettingsSchema
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -16,6 +17,8 @@ import java.io.IOException
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "user_profile_prefs")
 
 class ProfileRepository(private val context: Context) {
+
+    private val statDao = com.example.flowave.data.local.AppDatabase.getDatabase(context).statDao()
 
     private object PreferencesKeys {
         val USERNAME = stringPreferencesKey("username")
@@ -44,27 +47,31 @@ class ProfileRepository(private val context: Context) {
             preferences[PreferencesKeys.SETTINGS_JSON] ?: SettingsSchema.getDefaultJson()
         }
 
-    val userProfile: Flow<UserProfile> = context.dataStore.data
-        .catch { exception ->
-            if (exception is IOException) {
-                emit(emptyPreferences())
-            } else {
-                throw exception
-            }
-        }
-        .map { preferences ->
-            val json = preferences[PreferencesKeys.SETTINGS_JSON] ?: SettingsSchema.getDefaultJson()
-            UserProfile(
-                username = preferences[PreferencesKeys.USERNAME] ?: "Audio Enthusiast",
-                bio = preferences[PreferencesKeys.BIO] ?: "Loving ultra-fidelity sound with FloWave",
-                avatarUrl = preferences[PreferencesKeys.AVATAR_URL],
-                preferredTheme = SettingsSchema.getValue(json, "preferred_theme").takeIf { it.isNotEmpty() } ?: preferences[PreferencesKeys.PREFERRED_THEME] ?: "GLASS",
-                preferredQuality = SettingsSchema.getValue(json, "preferred_quality").takeIf { it.isNotEmpty() } ?: preferences[PreferencesKeys.PREFERRED_QUALITY] ?: "Ultra FLAC (24-bit)",
-                customBgUrl = preferences[PreferencesKeys.CUSTOM_BG_URL],
-                backgroundPreset = preferences[PreferencesKeys.BACKGROUND_PRESET] ?: "LIQUID_GLASS",
-                streakDays = preferences[PreferencesKeys.STREAK_DAYS] ?: 5
-            )
-        }
+    val userProfile: Flow<UserProfile> = combine(
+        context.dataStore.data
+            .catch { exception ->
+                if (exception is java.io.IOException) emit(emptyPreferences())
+                else throw exception
+            },
+        statDao.getTotalListeningTimeMs(),
+        statDao.getTotalPlayCount()
+    ) { preferences, totalMs, totalCount ->
+        val json = preferences[PreferencesKeys.SETTINGS_JSON] ?: SettingsSchema.getDefaultJson()
+        UserProfile(
+            username = preferences[PreferencesKeys.USERNAME] ?: "Audio Enthusiast",
+            bio = preferences[PreferencesKeys.BIO] ?: "Loving ultra-fidelity sound with FloWave",
+            avatarUrl = preferences[PreferencesKeys.AVATAR_URL],
+            preferredTheme = SettingsSchema.getValue(json, "preferred_theme")
+                .takeIf { it.isNotEmpty() } ?: preferences[PreferencesKeys.PREFERRED_THEME] ?: "GLASS",
+            preferredQuality = SettingsSchema.getValue(json, "preferred_quality")
+                .takeIf { it.isNotEmpty() } ?: preferences[PreferencesKeys.PREFERRED_QUALITY] ?: "Ultra FLAC (24-bit)",
+            customBgUrl = preferences[PreferencesKeys.CUSTOM_BG_URL],
+            backgroundPreset = preferences[PreferencesKeys.BACKGROUND_PRESET] ?: "LIQUID_GLASS",
+            totalTimeMs = totalMs ?: 0L,
+            playCountTotal = totalCount,
+            streakDays = preferences[PreferencesKeys.STREAK_DAYS] ?: 0
+        )
+    }
 
     val audioNormalization: Flow<Boolean> = settingsJson
         .map { SettingsSchema.getBoolean(it, "audio_normalization") }

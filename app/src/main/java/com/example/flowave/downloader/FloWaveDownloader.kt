@@ -37,8 +37,9 @@ class FloWaveDownloader(
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .callTimeout(600, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
@@ -47,6 +48,28 @@ class FloWaveDownloader(
     private val innerTubeRepo = InnerTubeRepository()
 
     val allDownloadEntries: Flow<List<DownloadEntry>> = downloadDao.getAllDownloads()
+
+    suspend fun startDownload(track: InnerTubeTrack) = withContext(Dispatchers.IO) {
+        try {
+            val streamUrl = innerTubeRepo.getStreamUrl(track.id)
+            if (streamUrl.isNotBlank()) {
+                downloadAudioTrack(track, streamUrl)
+            } else {
+                val initialEntry = DownloadEntry(
+                    id = track.id,
+                    trackTitle = track.title,
+                    artistName = track.artist,
+                    thumbnailUrl = track.thumbnailUrl,
+                    downloadUrl = "",
+                    progress = 0f,
+                    status = DownloadStatus.FAILED
+                )
+                downloadDao.insertDownload(initialEntry)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FloWaveDownloader", "Failed to start download: ${e.message}")
+        }
+    }
 
     private fun isStreamUrlExpired(url: String): Boolean {
         if (!url.contains("expire=")) return false
@@ -343,7 +366,7 @@ class FloWaveDownloader(
             return false
         }
 
-        downloadDao.markCompleted(taskId, file.absolutePath, DownloadStatus.DONE)
+        downloadDao.markCompleted(taskId, file.absolutePath, DownloadStatus.DONE, System.currentTimeMillis())
         saveToOfflineLibrary(track, file, musicDir, durationMs)
         return true
     }

@@ -8,8 +8,8 @@ object FloWaveConstants {
     const val USER_AGENT_WEB_EMBEDDED = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
     const val USER_AGENT_FLOWAVE_APP = "FloWave/2.0 (Android)"
     
-    // In-memory stream cache duration (2 hours in milliseconds)
-    const val STREAM_CACHE_DURATION_MS = 7_200_000L
+    // In-memory stream cache duration (30 minutes in milliseconds)
+    const val STREAM_CACHE_DURATION_MS = 1_800_000L
     
     // Connect and read timeouts
     const val CONNECT_TIMEOUT_SECONDS = 15L

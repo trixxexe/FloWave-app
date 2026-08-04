@@ -112,10 +112,10 @@ interface DownloadDao {
     suspend fun updateProgress(id: String, progress: Float, bytes: Long, status: DownloadStatus)
 
     @Query("UPDATE download_entries SET status = :status, filePath = :path, completedAt = :completedAt WHERE id = :id")
-    suspend fun markCompleted(id: String, path: String, status: DownloadStatus = DownloadStatus.DONE, completedAt: Long = System.currentTimeMillis())
+    suspend fun markCompleted(id: String, path: String, status: DownloadStatus, completedAt: Long)
 
     @Query("UPDATE download_entries SET status = :status, errorMessage = :error WHERE id = :id")
-    suspend fun markFailed(id: String, error: String, status: DownloadStatus = DownloadStatus.FAILED)
+    suspend fun markFailed(id: String, error: String, status: DownloadStatus)
 
     @Delete
     suspend fun deleteDownload(download: DownloadEntry)
