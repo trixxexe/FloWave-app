@@ -44,9 +44,15 @@ cd flowave
 ---
 
 ## ✨ Features Implemented
-- 🔍 **Keyword Audio Search & Full Streaming**: Search songs by title or artist (e.g. "Arz Kiya Hai") and stream full 320kbps / FLAC audio streams.
+- 🔍 **Keyword Audio Search & Full Streaming**: Search songs by title or artist and stream the best available audio format.
 - ⚡ **Dynamic Island & Live Waveform**: System top pill visualizer for active track state, cover art, and real-time audio canvas equalizer.
 - 🎧 **Dynamic System Audio Route Selector**: Roundish pill that dynamically queries Android `AudioManager` and `AudioDeviceInfo` to route output to Bluetooth, USB DAC, or Stereo Speakers.
 - 🔥 **Daily Listening Streak Engine**: Real-time streak tracking persisted in DataStore and updated on daily playback.
-- ⬇️ **Seal Downloader**: Keyword and direct-link audio extractor saved into local Room database and device media store.
+- ⬇️ **Embedded yt-dlp Downloader**: Keyword and direct-link audio extractor saved into the local Room database.
 - 🎨 **Custom Glassmorphism & Wallpapers**: Liquid Glass theme presets and custom background image URL rendering.
+
+## Licensing and attribution
+
+FloWave is GPL-3.0-or-later. See [`LICENSE`](LICENSE) and
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the complete license,
+copyright attribution, and the documented Velune/Seal integration origins.

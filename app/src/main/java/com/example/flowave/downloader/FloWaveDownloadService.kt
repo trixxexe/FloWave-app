@@ -23,9 +23,7 @@ class FloWaveDownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val envManager = FloWaveNativeEnvManager(applicationContext)
-        envManager.prepareEnvironment()
-        downloadEngine = SealStyleDownloadEngine(envManager)
+        downloadEngine = SealStyleDownloadEngine()
         createNotificationChannel()
     }
 
@@ -75,7 +73,7 @@ class FloWaveDownloadService : Service() {
             }
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

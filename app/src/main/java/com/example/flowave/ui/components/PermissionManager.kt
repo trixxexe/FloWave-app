@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FolderSpecial
-import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,7 +32,6 @@ fun PermissionManager(
         val list = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             list.add(Manifest.permission.READ_MEDIA_AUDIO)
-            list.add(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             list.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             list.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -77,7 +75,7 @@ fun PermissionManager(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "FloWave needs permissions to scan your local high-res audio library and display playback notifications on your device.",
+                            text = "FloWave needs audio access to index and play songs stored on your device. Playback notifications are optional.",
                             color = TextMuted,
                             fontSize = 13.sp
                         )
@@ -88,11 +86,6 @@ fun PermissionManager(
                             Text("Audio Library Storage Access", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Playback Controls Notification", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
                     }
                 },
                 confirmButton = {

@@ -89,6 +89,7 @@ class FloWaveRepository(private val context: Context) {
 
     suspend fun scanMediaStore(): List<Track> = withContext(Dispatchers.IO) {
         val localList = mutableListOf<Track>()
+        var queryCompleted = false
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -97,7 +98,8 @@ class FloWaveRepository(private val context: Context) {
             MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.ALBUM_ID,
-            MediaStore.Audio.Media.DATA
+            MediaStore.Audio.Media.DATA,
+            MediaStore.Audio.Media.RELATIVE_PATH
         )
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         
@@ -109,13 +111,15 @@ class FloWaveRepository(private val context: Context) {
                 null,
                 "${MediaStore.Audio.Media.TITLE} ASC"
             )?.use { cursor ->
+                queryCompleted = true
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                 val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                 val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
-                val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                val relativePathCol = cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
 
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idCol)
@@ -124,7 +128,8 @@ class FloWaveRepository(private val context: Context) {
                     var album = cursor.getString(albumCol) ?: "Unknown Album"
                     var duration = cursor.getLong(durationCol)
                     val albumId = cursor.getLong(albumIdCol)
-                    val filePath = cursor.getString(dataCol) ?: ""
+                    val filePath = if (dataCol >= 0) cursor.getString(dataCol) ?: "" else ""
+                    val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
 
                     // Robust local metadata extraction: Prefer actual tags via MediaMetadataRetriever
                     // if standard MediaStore returns "<unknown>" or empty.
@@ -193,7 +198,7 @@ class FloWaveRepository(private val context: Context) {
                         artworkUri = albumArtUri,
                         isOnline = false,
                         source = "LOCAL",
-                        folderPath = file.parent
+                        folderPath = relativePath?.trimEnd('/')?.takeIf { it.isNotBlank() } ?: file.parent
                     )
                     localList.add(track)
                 }
@@ -202,6 +207,11 @@ class FloWaveRepository(private val context: Context) {
             android.util.Log.e("FloWaveRepository", "Error scanning local MediaStore tracks", e)
         }
 
+        if (queryCompleted) {
+            // Refresh only the MediaStore-owned rows. Downloaded/imported rows
+            // remain available offline and are never removed by a rescan.
+            trackDao.deleteLocalTracks()
+        }
         if (localList.isNotEmpty()) {
             trackDao.insertTracks(localList)
         }

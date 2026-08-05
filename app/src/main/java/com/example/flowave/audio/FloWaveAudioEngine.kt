@@ -73,7 +73,7 @@ data class EqualizerState(
 
 class FloWaveAudioEngine(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private val innerTubeRepo = InnerTubeRepository()
+    private val innerTubeRepo = InnerTubeRepository(context)
     private val db = com.example.flowave.data.local.AppDatabase.getDatabase(context)
     private val queueDao = db.queueDao()
     private val trackDao = db.trackDao()
@@ -540,15 +540,22 @@ class FloWaveAudioEngine(private val context: Context) {
         if (queue.isEmpty()) return
         val player = exoPlayer ?: return
 
+        val playableEntries = queue.mapNotNull { track ->
+            createMediaItem(track)?.let { mediaItem -> track to mediaItem }
+        }
+        if (playableEntries.isEmpty()) return
+        val requestedTrack = queue.getOrNull(startIndex)
+        val effectiveIndex = playableEntries.indexOfFirst { it.first.id == requestedTrack?.id }
+            .takeIf { it >= 0 } ?: 0
+        val playableQueue = playableEntries.map { it.first }
+
         _playbackState.value = _playbackState.value.copy(
-            queue = queue,
-            currentQueueIndex = startIndex,
-            currentTrack = queue.getOrNull(startIndex)
+            queue = playableQueue,
+            currentQueueIndex = effectiveIndex,
+            currentTrack = playableQueue.getOrNull(effectiveIndex)
         )
 
-        val mediaItems = queue.mapNotNull { track -> createMediaItem(track) }
-
-        player.setMediaItems(mediaItems, startIndex, 0L)
+        player.setMediaItems(playableEntries.map { it.second }, effectiveIndex, 0L)
         player.prepare()
         player.play()
         persistQueueAndState()

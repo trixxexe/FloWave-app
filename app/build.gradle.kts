@@ -27,10 +27,12 @@ android {
     val alias = System.getenv("KEY_ALIAS")
     val keyPass = System.getenv("KEY_PASSWORD")
 
+    // A release build is intentionally reproducible without private signing secrets.
+    // CI supplies these values for a signed artifact; otherwise release falls back to
+    // the local debug keystore below instead of failing during configuration.
     val hasAnyReleaseSecret = releaseKeystorePath != null || storePass != null || alias != null || keyPass != null
-    val isReleaseBuild = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
 
-    if (hasAnyReleaseSecret || isReleaseBuild) {
+    if (hasAnyReleaseSecret) {
       if (releaseKeystorePath == null) throw GradleException("Missing environment variable: KEYSTORE_PATH")
       if (storePass == null) throw GradleException("Missing environment variable: STORE_PASSWORD")
       if (alias == null) throw GradleException("Missing environment variable: KEY_ALIAS")
@@ -131,6 +133,11 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
+  // GPL-3.0 yt-dlp/FFmpeg/aria2c Android integration, adapted from Seal's
+  // production download lifecycle. See THIRD_PARTY_NOTICES.md.
+  implementation(libs.youtubedl.android.library)
+  implementation(libs.youtubedl.android.ffmpeg)
+  implementation(libs.youtubedl.android.aria2c)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

@@ -100,7 +100,7 @@ fun MainScreen() {
     val repository = remember { FloWaveRepository(context) }
     val profileRepo = remember { ProfileRepository(context) }
     val audioEngine = remember { FloWaveAudioEngine.getInstance(context) }
-    val innerTubeRepo = remember { InnerTubeRepository() }
+    val innerTubeRepo = remember { InnerTubeRepository(context) }
     val downloader = remember { FloWaveDownloader(context, repository) }
 
     val localTracks by repository.allTracks.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -149,13 +149,21 @@ fun MainScreen() {
 
     // Fetch initial trending tracks
     LaunchedEffect(Unit) {
-        innerTubeRepo.ensureKeysUpdated()
-        try {
-            featuredOnlineTracks = innerTubeRepo.getFeaturedAudioStreams()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        // Index local media immediately. Home must remain useful when the
+        // device is offline or the online resolver is unavailable.
+        launch {
+            runCatching { repository.scanMediaStore() }
+                .onFailure { android.util.Log.w("MainScreen", "Local media scan failed", it) }
         }
-        repository.scanMediaStore()
+        launch {
+            runCatching {
+                withTimeoutOrNull(10_000L) {
+                    innerTubeRepo.ensureKeysUpdated()
+                    innerTubeRepo.getFeaturedAudioStreams()
+                } ?: emptyList()
+            }.onSuccess { featuredOnlineTracks = it }
+                .onFailure { android.util.Log.d("MainScreen", "Online discovery unavailable", it) }
+        }
 
         // Check for previous crashes
         if (com.example.flowave.utils.FloWaveCrashHandler.hasCrashReport(context)) {
@@ -385,6 +393,13 @@ fun MainScreen() {
                         },
                         onProfileClick = { selectedTab = 5 },
                         onDownloaderClick = { selectedTab = 3 },
+                        onScanClick = {
+                            coroutineScope.launch {
+                                repository.scanMediaStore()
+                                Toast.makeText(context, "Device library refreshed", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onPlayQueue = { queue, index -> audioEngine.setQueueAndPlay(queue, index) },
                         settingsJson = settingsJson
                     )
 

@@ -1,5 +1,8 @@
 package com.example.flowave.data.remote
 
+import android.content.Context
+import com.example.flowave.FloWaveRuntime
+import com.example.flowave.downloader.SealStyleDownloadEngine
 import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.LrcLine
 import com.example.flowave.utils.FloWaveConstants
@@ -50,6 +53,11 @@ object InnerTubeClients {
         clientVersion = "1.20240216.07.00",
         userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP
     )
+    val WEB = InnerTubeClientConfig(
+        clientName = "WEB",
+        clientVersion = "2.20260114.00.00",
+        userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP
+    )
     val TVHTML5_SIMPLY_EMBEDDED = InnerTubeClientConfig(
         clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
         clientVersion = "2.0",
@@ -61,10 +69,12 @@ object InnerTubeClients {
         userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_WEB_EMBEDDED
     )
 
-    val FALLBACK_CHAIN = listOf(ANDROID_EMBEDDED, ANDROID_TESTSUITE, ANDROID_VR, TVHTML5_SIMPLY_EMBEDDED, WEB_EMBEDDED, ANDROID_MUSIC, WEB_REMIX)
+    val FALLBACK_CHAIN = listOf(ANDROID_EMBEDDED, ANDROID_TESTSUITE, ANDROID_VR, TVHTML5_SIMPLY_EMBEDDED, WEB_EMBEDDED, ANDROID_MUSIC, WEB_REMIX, WEB)
 }
 
-class InnerTubeRepository {
+class InnerTubeRepository(context: Context? = null) {
+    private val appContext = context?.applicationContext
+    private val localStreamResolver = appContext?.let { SealStyleDownloadEngine() }
     private val client = OkHttpClient.Builder()
         .connectTimeout(FloWaveConstants.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(FloWaveConstants.READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -450,6 +460,22 @@ class InnerTubeRepository {
             }
         }
 
+        // Prefer the embedded yt-dlp resolver. It follows the current YouTube
+        // player-client/signature rules and avoids stale hard-coded InnerTube
+        // client versions. The legacy InnerTube chain remains a fallback for
+        // devices where the optional runtime could not initialize.
+        if (FloWaveRuntime.ready) {
+            streamUrlCache[videoId]?.second?.let { cachedUrl ->
+                if (!isStreamUrlExpired(cachedUrl)) return@withContext cachedUrl
+            }
+        }
+        localStreamResolver?.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")
+            ?.getOrNull()
+            ?.let { resolved ->
+                streamUrlCache[videoId] = System.currentTimeMillis() to resolved
+                return@withContext resolved
+            }
+
         // Check cache first (valid for 2 hours)
         val cached = streamUrlCache[videoId]
         if (cached != null) {
@@ -483,17 +509,17 @@ class InnerTubeRepository {
                         })
                     })
                     put("videoId", videoId)
-                    put("playbackContext", JSONObject().apply {
-                        put("contentPlaybackContext", JSONObject().apply {
-                            put("signatureTimestamp", 19886)
-                        })
-                    })
+                    // These flags are required by current player clients and
+                    // are also used by Velune's InnerTube request model.
+                    put("contentCheckOk", true)
+                    put("racyCheckOk", true)
                 }
 
-                val apiKey = scrapedApiKey ?: if (clientConfig.clientName.contains("MUSIC") || clientConfig.clientName.contains("ANDROID")) {
-                    com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_MUSIC
+                val apiKey = if (clientConfig.clientName.contains("MUSIC") || clientConfig.clientName.contains("ANDROID")) {
+                    scrapedApiKey?.takeIf { scrapedClientVersion?.contains("MUSIC", ignoreCase = true) == true }
+                        ?: com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_MUSIC
                 } else {
-                    com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_WEB
+                    scrapedApiKey ?: com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_WEB
                 }
                 val playerUrl = "https://www.youtube.com/youtubei/v1/player?key=$apiKey"
 
