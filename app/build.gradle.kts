@@ -70,6 +70,20 @@ android {
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
+
+  // Native yt-dlp and FFmpeg binaries are large when all CPU architectures
+  // are bundled into one universal APK. Ship one small APK per architecture;
+  // every split retains the complete streaming and download feature set.
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      // FloWave targets physical Android phones; arm64 is the recommended
+      // download and armeabi-v7a keeps compatibility with older phones.
+      include("arm64-v8a", "armeabi-v7a")
+      isUniversalApk = false
+    }
+  }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
@@ -133,11 +147,10 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
-  // GPL-3.0 yt-dlp/FFmpeg/aria2c Android integration, adapted from Seal's
+  // GPL-3.0 yt-dlp/FFmpeg Android integration, adapted from Seal's
   // production download lifecycle. See THIRD_PARTY_NOTICES.md.
   implementation(libs.youtubedl.android.library)
   implementation(libs.youtubedl.android.ffmpeg)
-  implementation(libs.youtubedl.android.aria2c)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

@@ -34,13 +34,14 @@ not imply endorsement by Seal or its authors.
 
 * [`io.github.junkfood02.youtubedl-android:library:0.17.3`](https://github.com/yausername/youtubedl-android)
 * [`io.github.junkfood02.youtubedl-android:ffmpeg:0.17.3`](https://github.com/yausername/youtubedl-android)
-* [`io.github.junkfood02.youtubedl-android:aria2c:0.17.3`](https://github.com/yausername/youtubedl-android)
 
 These artifacts are GPL-3.0 licensed and are declared explicitly in
 `gradle/libs.versions.toml`. Their own notices are distributed by Gradle in
 the dependency metadata and remain applicable to the packaged application.
-FFmpeg and aria2c retain their respective upstream notices inside the Android
-artifacts; FloWave does not relicence those components.
+FFmpeg retains its upstream notices inside the Android artifact; FloWave does
+not relicence that component. Aria2c is intentionally not bundled because the
+current downloader does not invoke it; removing that unused native payload
+keeps architecture-specific APKs small without changing user-facing features.
 
 ## Compliance notes
 

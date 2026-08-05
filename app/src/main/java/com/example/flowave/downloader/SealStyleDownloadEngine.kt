@@ -15,7 +15,7 @@ import java.util.UUID
 /**
  * FloWave's GPL-3.0 download adapter.
  *
- * This uses the embedded yt-dlp/FFmpeg/aria2c Android runtime shipped by the
+ * This uses the embedded yt-dlp/FFmpeg Android runtime shipped by the
  * GPL-3.0 youtubedl-android project (the same runtime family used by Seal).
  * It deliberately does not execute a downloaded Linux binary, which cannot run
  * reliably on Android and was the reason the previous downloader failed.
