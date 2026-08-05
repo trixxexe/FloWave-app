@@ -46,14 +46,12 @@ class FloWaveDownloadService : Service() {
             "FloWaveDownloads"
         )
         val taskId = "url_${UUID.randomUUID()}"
-        downloadDao.insertDownload(
-            DownloadEntry(
-                id = taskId,
-                trackTitle = targetUrl,
-                artistName = "Online download",
-                downloadUrl = targetUrl,
-                status = DownloadStatus.DOWNLOADING
-            )
+        val downloadEntry = DownloadEntry(
+            id = taskId,
+            trackTitle = targetUrl,
+            artistName = "Online download",
+            downloadUrl = targetUrl,
+            status = DownloadStatus.DOWNLOADING
         )
 
         activeDownloads.incrementAndGet()
@@ -66,6 +64,7 @@ class FloWaveDownloadService : Service() {
 
         serviceScope.launch {
             try {
+                downloadDao.insertDownload(downloadEntry)
                 downloadEngine.executeDownload(targetUrl, outputDir).collect { state ->
                     when (state) {
                         is DownloadState.Downloading -> {
@@ -87,6 +86,13 @@ class FloWaveDownloadService : Service() {
                         else -> {}
                     }
                 }
+            } catch (error: Exception) {
+                downloadDao.markFailed(
+                    taskId,
+                    error.message ?: "Download failed",
+                    DownloadStatus.FAILED
+                )
+                updateNotification("Error: ${error.message ?: "Download failed"}", 0)
             } finally {
                 val remaining = activeDownloads.decrementAndGet()
                 if (remaining <= 0) {
