@@ -7,19 +7,28 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Environment
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.example.flowave.data.local.AppDatabase
+import com.example.flowave.data.model.DownloadEntry
+import com.example.flowave.data.model.DownloadStatus
+import com.example.flowave.data.model.Track
+import com.example.flowave.data.repository.FloWaveRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
 
 class FloWaveDownloadService : Service() {
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
     private lateinit var downloadEngine: SealStyleDownloadEngine
     private val activeDownloads = java.util.concurrent.atomic.AtomicInteger(0)
+    private val downloadDao by lazy { AppDatabase.getDatabase(applicationContext).downloadDao() }
+    private val repository by lazy { FloWaveRepository(applicationContext) }
 
     override fun onCreate() {
         super.onCreate()
@@ -32,7 +41,20 @@ class FloWaveDownloadService : Service() {
             if (activeDownloads.get() == 0) stopSelf(startId)
             return START_NOT_STICKY
         }
-        val outputDir = File(getExternalFilesDir(null), "FloWaveDownloads")
+        val outputDir = File(
+            getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: filesDir,
+            "FloWaveDownloads"
+        )
+        val taskId = "url_${UUID.randomUUID()}"
+        downloadDao.insertDownload(
+            DownloadEntry(
+                id = taskId,
+                trackTitle = targetUrl,
+                artistName = "Online download",
+                downloadUrl = targetUrl,
+                status = DownloadStatus.DOWNLOADING
+            )
+        )
 
         activeDownloads.incrementAndGet()
         val initialNotification = buildNotification("Initializing download...")
@@ -49,14 +71,17 @@ class FloWaveDownloadService : Service() {
                         is DownloadState.Downloading -> {
                             val text = "${state.progress.toInt()}% at ${state.speed} (ETA: ${state.eta})"
                             updateNotification(text, state.progress.toInt())
+                            downloadDao.updateProgress(taskId, (state.progress / 100f).coerceIn(0f, 1f), 0L, DownloadStatus.DOWNLOADING)
                         }
                         is DownloadState.PostProcessing -> {
                             updateNotification(state.step, 100)
                         }
                         is DownloadState.Success -> {
+                            completeDirectDownload(taskId, state.outputFilePath)
                             updateNotification("Download finished successfully!", 100)
                         }
                         is DownloadState.Error -> {
+                            downloadDao.markFailed(taskId, state.message, DownloadStatus.FAILED)
                             updateNotification("Error: ${state.message}", 0)
                         }
                         else -> {}
@@ -65,10 +90,8 @@ class FloWaveDownloadService : Service() {
             } finally {
                 val remaining = activeDownloads.decrementAndGet()
                 if (remaining <= 0) {
-                    stopForeground(STOP_FOREGROUND_DETACH)
-                    stopSelf(startId)
-                } else {
-                    stopSelf(startId)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelfResult(startId)
                 }
             }
         }
@@ -107,6 +130,41 @@ class FloWaveDownloadService : Service() {
     private fun updateNotification(text: String, progress: Int) {
         val notification = buildNotification(text, progress)
         getSystemService(NotificationManager::class.java)?.notify(NOTIFICATION_ID, notification)
+    }
+
+    private suspend fun completeDirectDownload(taskId: String, outputPath: String) {
+        val file = File(outputPath)
+        if (!file.isFile || file.length() == 0L) {
+            downloadDao.markFailed(taskId, "yt-dlp produced an empty file", DownloadStatus.FAILED)
+            return
+        }
+        var durationMs = 0L
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            durationMs = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+        } catch (_: Exception) {
+            // A valid source may omit container duration; the file is still
+            // imported and can be measured by the player when opened.
+        } finally {
+            runCatching { retriever.release() }
+        }
+        val title = file.nameWithoutExtension.substringBeforeLast(" [").ifBlank { file.nameWithoutExtension }
+        downloadDao.markCompleted(taskId, file.absolutePath, DownloadStatus.DONE, System.currentTimeMillis())
+        repository.insertTrack(
+            Track(
+                id = "dl_$taskId",
+                title = title,
+                artist = "Downloaded",
+                album = "Downloaded",
+                durationMs = durationMs,
+                mediaUri = file.absolutePath,
+                isOnline = false,
+                source = "DOWNLOADED",
+                folderPath = file.parent
+            )
+        )
     }
 
     companion object {

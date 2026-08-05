@@ -104,6 +104,7 @@ fun MainScreen() {
     val downloader = remember { FloWaveDownloader(context, repository) }
 
     val localTracks by repository.allTracks.collectAsStateWithLifecycle(initialValue = emptyList())
+    val offlineTracks = remember(localTracks) { localTracks.filterNot { it.isOnline } }
     val totalTimeMs by repository.totalListeningTimeMs.collectAsStateWithLifecycle(initialValue = 0L)
     val totalPlayCount by repository.totalPlayCount.collectAsStateWithLifecycle(initialValue = 0)
     val downloadEntries by downloader.allDownloadEntries.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -381,7 +382,7 @@ fun MainScreen() {
             ) {
                 when (selectedTab) {
                     0 -> HomeScreen(
-                        tracks = localTracks,
+                        tracks = offlineTracks,
                         featuredOnline = featuredOnlineTracks,
                         totalListeningTimeMs = totalTimeMs ?: 0L,
                         totalPlayCount = totalPlayCount,
@@ -410,8 +411,7 @@ fun MainScreen() {
                             coroutineScope.launch {
                                 try {
                                     Toast.makeText(context, "Extracting audio: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    val streamUrl = innerTubeRepo.getStreamUrl(online.id)
-                                    downloader.downloadAudioTrack(online, streamUrl)
+                                    downloader.downloadAudioTrack(online, "")
                                 } catch (e: Exception) {
                                     Toast.makeText(context, "Download error: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
@@ -420,7 +420,7 @@ fun MainScreen() {
                     )
 
                     2 -> LibraryScreen(
-                        localTracks = localTracks,
+                        localTracks = offlineTracks,
                         searchOnlineResults = searchOnlineResults,
                         onTrackClick = { track -> audioEngine.playTrack(track) },
                         onOnlineTrackClick = { online ->
@@ -432,8 +432,7 @@ fun MainScreen() {
                             coroutineScope.launch {
                                 try {
                                     Toast.makeText(context, "Starting download: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    val streamUrl = innerTubeRepo.getStreamUrl(online.id)
-                                    downloader.downloadAudioTrack(online, streamUrl)
+                                    downloader.downloadAudioTrack(online, "")
                                 } catch (e: Exception) {
                                     Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }

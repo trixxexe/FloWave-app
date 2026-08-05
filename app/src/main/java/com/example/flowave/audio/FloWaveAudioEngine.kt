@@ -126,15 +126,16 @@ class FloWaveAudioEngine(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 val state = _playbackState.value
-                val currentIdx = state.currentQueueIndex
+                val persistableQueue = state.queue.filterNot { it.isOnline }
+                val currentIdx = state.currentQueueIndex.coerceIn(0, (persistableQueue.size - 1).coerceAtLeast(0))
                 val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
                 db.withTransaction {
                     queueDao.clearQueueItems()
-                    trackDao.insertTracks(state.queue)
-                    val queueItems = state.queue.mapIndexed { index, track ->
+                    if (persistableQueue.isNotEmpty()) trackDao.insertTracks(persistableQueue)
+                    val queueItems = persistableQueue.mapIndexed { index, track ->
                         com.example.flowave.data.model.QueueItem(trackId = track.id, orderIndex = index)
                     }
-                    queueDao.insertQueueItems(queueItems)
+                    if (queueItems.isNotEmpty()) queueDao.insertQueueItems(queueItems)
                     queueDao.saveQueueState(
                         com.example.flowave.data.model.QueueState(
                             currentQueueIndex = currentIdx,

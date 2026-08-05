@@ -24,7 +24,7 @@ class SealStyleDownloadEngine {
 
     fun executeDownload(url: String, outputDir: File): Flow<DownloadState> = channelFlow {
         send(DownloadState.Initializing)
-        if (!FloWaveRuntime.ready) {
+        if (!FloWaveRuntime.awaitReady()) {
             send(DownloadState.Error("The embedded yt-dlp runtime is unavailable. Restart FloWave and try again."))
             return@channelFlow
         }
@@ -81,7 +81,7 @@ class SealStyleDownloadEngine {
 
     /** Resolves a playable audio URL through the same embedded yt-dlp runtime. */
     suspend fun resolveAudioUrl(url: String): Result<String> = withContext(Dispatchers.IO) {
-        if (!FloWaveRuntime.ready) return@withContext Result.failure(IllegalStateException("yt-dlp runtime unavailable"))
+        if (!FloWaveRuntime.awaitReady()) return@withContext Result.failure(IllegalStateException("yt-dlp runtime unavailable"))
         runCatching {
             val request = YoutubeDLRequest(url).apply {
                 addOption("--no-playlist")

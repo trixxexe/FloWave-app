@@ -145,11 +145,9 @@ jobs:
 
       - name: Run debug unit tests
         run: ./gradlew testDebugUnitTest --stacktrace --no-daemon
-        continue-on-error: true
 
       - name: Run Android lint
         run: ./gradlew lintDebug --stacktrace --no-daemon
-        continue-on-error: true
 
       - name: Build debug APK
         if: ${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' || github.event_name != 'workflow_dispatch' }}

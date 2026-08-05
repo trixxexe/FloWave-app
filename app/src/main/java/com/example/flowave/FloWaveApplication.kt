@@ -7,6 +7,8 @@ import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 
 /**
@@ -25,9 +27,9 @@ class FloWaveApplication : Application() {
             runCatching {
                 YoutubeDL.init(this@FloWaveApplication)
                 FFmpeg.init(this@FloWaveApplication)
-                FloWaveRuntime.ready = true
+                FloWaveRuntime.markReady(true)
             }.onFailure {
-                FloWaveRuntime.ready = false
+                FloWaveRuntime.markReady(false)
                 Log.e(TAG, "Embedded yt-dlp runtime initialization failed", it)
             }
         }
@@ -39,6 +41,16 @@ class FloWaveApplication : Application() {
 }
 
 object FloWaveRuntime {
+    private val readySignal = CompletableDeferred<Boolean>()
+
     @Volatile
     var ready: Boolean = false
+
+    fun markReady(value: Boolean) {
+        ready = value
+        readySignal.complete(value)
+    }
+
+    suspend fun awaitReady(timeoutMs: Long = 30_000L): Boolean =
+        if (readySignal.isCompleted) ready else withTimeoutOrNull(timeoutMs) { readySignal.await() } == true
 }
