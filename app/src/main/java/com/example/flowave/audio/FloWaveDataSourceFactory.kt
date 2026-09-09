@@ -38,19 +38,14 @@ class FloWaveDataSourceFactory(
                 if (scheme == "flowave") {
                     val videoId = dataSpec.uri.lastPathSegment
                         ?.takeIf { it.isNotBlank() }
-                        ?: throw androidx.media3.datasource.DataSourceException(
-                            "Missing online track identifier",
-                            androidx.media3.datasource.DataSourceException.POSITION_OUT_OF_RANGE
-                        )
+                        ?: throw java.io.IOException("Missing online track identifier")
                     val resolvedUrl = runBlocking(Dispatchers.IO) {
                         withTimeout(45_000L) {
                             streamRepository.getStreamUrl(videoId)
                         }
                     }
                     if (resolvedUrl.isBlank() || !resolvedUrl.startsWith("http")) {
-                        throw androidx.media3.datasource.DataSourceException(
-                            "Online stream resolver returned an invalid URL"
-                        )
+                        throw java.io.IOException("Online stream resolver returned an invalid URL")
                     }
                     activeDataSource = cacheDataSource
                     val resolvedSpec = dataSpec.buildUpon()
