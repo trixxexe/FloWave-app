@@ -119,12 +119,8 @@ class InnerTubeRepository(context: Context? = null) {
         return if (seconds > 0L) seconds * 1000L else 210000L
     }
 
-    /** Resolve an online result into the app's canonical playable model. */
-    suspend fun resolveTrack(track: InnerTubeTrack, forceRefresh: Boolean = false): Track {
-        val streamUrl = getStreamUrl(track.id, forceRefresh)
-        if (streamUrl.isBlank() || !streamUrl.startsWith("http")) {
-            throw IOException("Resolver returned an invalid stream URL")
-        }
+    /** Build a stable online media model without resolving an expiring URL. */
+    fun createOnlineTrack(track: InnerTubeTrack): Track {
         val durationMs = getCachedDuration(track.id).takeIf { it > 0L }
             ?: parseDurationText(track.durationText)
         return Track(

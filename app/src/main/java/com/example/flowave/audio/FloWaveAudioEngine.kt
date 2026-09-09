@@ -33,7 +33,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
 import kotlin.math.sin
 
@@ -567,10 +566,9 @@ class FloWaveAudioEngine(private val context: Context) {
         persistQueueAndState()
     }
 
-    /** Resolves and starts an online result using the same path from every screen. */
+    /** Starts an online result; the stream is resolved lazily by Media3. */
     suspend fun playOnlineTrack(track: com.example.flowave.data.model.InnerTubeTrack) {
-        val resolved = withTimeout(45_000L) { innerTubeRepo.resolveTrack(track) }
-        playTrack(resolved)
+        playTrack(innerTubeRepo.createOnlineTrack(track))
     }
 
     fun playTrack(track: Track) {
