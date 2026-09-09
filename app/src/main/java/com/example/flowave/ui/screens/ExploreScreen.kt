@@ -27,13 +27,10 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.flowave.audio.FloWaveAudioEngine
 import com.example.flowave.data.model.InnerTubeTrack
-import com.example.flowave.data.model.Track
 import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.ui.components.GlassCard
 import com.example.flowave.ui.theme.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-import java.io.IOException
 
 @Composable
 fun ExploreScreen(
@@ -254,27 +251,9 @@ fun ExploreScreen(
                                 scope.launch {
                                     try {
                                         Toast.makeText(context, "Resolving stream for ${item.title}...", Toast.LENGTH_SHORT).show()
-                                        val streamUrl = withTimeoutOrNull(10000L) {
-                                            innerTubeRepo.getStreamUrl(item.id)
-                                        } ?: throw IOException("Timeout resolving stream")
-                                        if (streamUrl.isBlank() || !streamUrl.startsWith("http")) {
-                                            Toast.makeText(context, "Invalid stream URL received", Toast.LENGTH_LONG).show()
-                                            return@launch
-                                        }
-                                        val track = Track(
-                                            id = "yt_${item.id}",
-                                            title = item.title,
-                                            artist = item.artist,
-                                            album = item.album ?: "YouTube Music",
-                                            durationMs = 210000L,
-                                            mediaUri = streamUrl,
-                                            artworkUri = item.thumbnailUrl,
-                                            isOnline = true,
-                                            source = "YOUTUBE"
-                                        )
-                                        audioEngine.playTrack(track)
+                                        audioEngine.playOnlineTrack(item)
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Error: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             },

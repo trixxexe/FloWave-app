@@ -14,6 +14,8 @@ data class Track(
     val artworkUri: String? = null,
     val isOnline: Boolean = false,
     val source: String = "LOCAL", // LOCAL, YOUTUBE, DOWNLOADED
+    /** Stable source identifier used to refresh expiring online URLs. */
+    val sourceId: String? = null,
     val genre: String? = null,
     val year: Int? = null,
     val lyrics: String? = null,

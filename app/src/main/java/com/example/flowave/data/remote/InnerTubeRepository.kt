@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.flowave.FloWaveRuntime
 import com.example.flowave.downloader.SealStyleDownloadEngine
 import com.example.flowave.data.model.InnerTubeTrack
+import com.example.flowave.data.model.Track
 import com.example.flowave.data.model.LrcLine
 import com.example.flowave.utils.FloWaveConstants
 import kotlinx.coroutines.Dispatchers
@@ -112,6 +113,28 @@ class InnerTubeRepository(context: Context? = null) {
             // Fallback
         }
         return if (seconds > 0L) seconds * 1000L else 210000L
+    }
+
+    /** Resolve an online result into the app's canonical playable model. */
+    suspend fun resolveTrack(track: InnerTubeTrack, forceRefresh: Boolean = false): Track {
+        val streamUrl = getStreamUrl(track.id, forceRefresh)
+        if (streamUrl.isBlank() || !streamUrl.startsWith("http")) {
+            throw IOException("Resolver returned an invalid stream URL")
+        }
+        val durationMs = getCachedDuration(track.id).takeIf { it > 0L }
+            ?: parseDurationText(track.durationText)
+        return Track(
+            id = "yt_${track.id}",
+            title = track.title,
+            artist = track.artist,
+            album = track.album.ifBlank { "Online Stream" },
+            durationMs = durationMs,
+            mediaUri = streamUrl,
+            artworkUri = track.thumbnailUrl,
+            isOnline = true,
+            source = "YOUTUBE",
+            sourceId = track.id
+        )
     }
 
     private val fastClient = client.newBuilder()

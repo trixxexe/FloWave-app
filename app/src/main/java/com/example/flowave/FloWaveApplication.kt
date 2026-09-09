@@ -51,6 +51,6 @@ object FloWaveRuntime {
         readySignal.complete(value)
     }
 
-    suspend fun awaitReady(timeoutMs: Long = 30_000L): Boolean =
+    suspend fun awaitReady(timeoutMs: Long = 45_000L): Boolean =
         if (readySignal.isCompleted) ready else withTimeoutOrNull(timeoutMs) { readySignal.await() } == true
 }

@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
 import kotlin.math.sin
 
@@ -107,6 +108,7 @@ class FloWaveAudioEngine(private val context: Context) {
 
     private var progressJob: Job? = null
     private var playerListener: Player.Listener? = null
+    private var onlineRecoveryJob: Job? = null
 
     private fun updatePlaybackState(block: (PlaybackState) -> PlaybackState) {
         _playbackState.value = block(_playbackState.value)
@@ -293,18 +295,38 @@ class FloWaveAudioEngine(private val context: Context) {
                         
                         val currentTrack = _playbackState.value.currentTrack
                         if (currentTrack != null && currentTrack.isOnline) {
+                            if (onlineRecoveryJob?.isActive == true) return
                             val retries = trackRetryCount.getOrDefault(currentTrack.id, 0)
                             val currentPos = _playbackState.value.currentPositionMs
                             if (retries < 3) {
                                 trackRetryCount[currentTrack.id] = retries + 1
                                 val delayMs = (1000L * (1 shl retries)).coerceAtMost(8000L)
                                 android.util.Log.w("FloWaveAudioEngine", "Playback error for online track ${currentTrack.title} (retry ${retries + 1}/3). Delaying $delayMs ms then refreshing...")
-                                scope.launch {
+                                onlineRecoveryJob = scope.launch {
                                     delay(delayMs)
                                     try {
-                                        // Fetch a fresh stream URL
-                                        val freshUrl = innerTubeRepo.getStreamUrl(currentTrack.id.replace("yt_", ""), forceRefresh = true)
-                                        val updatedTrack = currentTrack.copy(mediaUri = freshUrl)
+                                        val sourceId = currentTrack.sourceId
+                                            ?: currentTrack.id.removePrefix("yt_")
+                                        val sourceTrack = com.example.flowave.data.model.InnerTubeTrack(
+                                            id = sourceId,
+                                            title = currentTrack.title,
+                                            artist = currentTrack.artist,
+                                            durationText = "",
+                                            thumbnailUrl = currentTrack.artworkUri.orEmpty(),
+                                            album = currentTrack.album
+                                        )
+                                        val updatedTrack = withTimeout(45_000L) {
+                                            innerTubeRepo.resolveTrack(sourceTrack, forceRefresh = true)
+                                        }.copy(
+                                            durationMs = currentTrack.durationMs,
+                                            isFavorite = currentTrack.isFavorite
+                                        )
+
+                                        // The user may have selected another item while the
+                                        // refresh was running. Never overwrite that newer state.
+                                        if (_playbackState.value.currentTrack?.id != currentTrack.id) {
+                                            return@launch
+                                        }
                                         
                                         // Update track in queue
                                         val updatedQueue = _playbackState.value.queue.map {
@@ -332,6 +354,8 @@ class FloWaveAudioEngine(private val context: Context) {
                                     
                                     // Fallback: skip if refresh fails
                                     playNext()
+                                }.also { job ->
+                                    job.invokeOnCompletion { if (onlineRecoveryJob === job) onlineRecoveryJob = null }
                                 }
                             } else {
                                 android.util.Log.e("FloWaveAudioEngine", "Max retries reached for track ${currentTrack.title}. Skipping to next track.")
@@ -498,6 +522,8 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun stopPlayback() {
+        onlineRecoveryJob?.cancel()
+        onlineRecoveryJob = null
         try {
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
@@ -560,6 +586,12 @@ class FloWaveAudioEngine(private val context: Context) {
         player.prepare()
         player.play()
         persistQueueAndState()
+    }
+
+    /** Resolves and starts an online result using the same path from every screen. */
+    suspend fun playOnlineTrack(track: com.example.flowave.data.model.InnerTubeTrack) {
+        val resolved = withTimeout(45_000L) { innerTubeRepo.resolveTrack(track) }
+        playTrack(resolved)
     }
 
     fun playTrack(track: Track) {
@@ -924,6 +956,8 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun release() {
+        onlineRecoveryJob?.cancel()
+        onlineRecoveryJob = null
         try {
             scope.cancel()
         } catch (e: Exception) {

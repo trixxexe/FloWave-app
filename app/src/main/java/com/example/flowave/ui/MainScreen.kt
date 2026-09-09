@@ -24,7 +24,6 @@ import coil.compose.AsyncImage
 import com.example.flowave.audio.FloWaveAudioEngine
 import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.LrcLine
-import com.example.flowave.data.model.Track
 import com.example.flowave.data.model.UserProfile
 import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.data.repository.FloWaveRepository
@@ -40,55 +39,18 @@ import com.example.flowave.ui.theme.*
 import com.example.flowave.utils.SettingsSchema
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.TimeoutCancellationException
 import android.content.Context
-import java.io.IOException
-import kotlinx.coroutines.CoroutineScope
 
 private suspend fun playOnlineTrack(
     online: InnerTubeTrack,
     context: Context,
     audioEngine: FloWaveAudioEngine,
-    innerTubeRepo: InnerTubeRepository,
-    coroutineScope: CoroutineScope
 ) {
     try {
         Toast.makeText(context, "Resolving stream...", Toast.LENGTH_SHORT).show()
-        val url = try {
-            withTimeoutOrNull(10000L) {
-                innerTubeRepo.getStreamUrl(online.id)
-            } ?: throw IOException("Stream URL resolution timed out")
-        } catch (e: Exception) {
-            Toast.makeText(context, "Failed to resolve stream: ${e.message}", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (url.isBlank() || !url.startsWith("http")) {
-            Toast.makeText(context, "Received invalid stream URL", Toast.LENGTH_LONG).show()
-            return
-        }
-        val cachedDuration = innerTubeRepo.getCachedDuration(online.id)
-        val finalDuration = if (cachedDuration > 0L) {
-            cachedDuration
-        } else {
-            innerTubeRepo.parseDurationText(online.durationText).coerceAtLeast(10000L)
-        }
-        val track = Track(
-            id = "yt_${online.id}",
-            title = online.title,
-            artist = online.artist,
-            album = if (online.album.isNotEmpty()) online.album else "Online Stream",
-            durationMs = finalDuration,
-            mediaUri = url,
-            artworkUri = online.thumbnailUrl,
-            isOnline = true,
-            source = "YOUTUBE"
-        )
-        audioEngine.playTrack(track)
-    } catch (e: TimeoutCancellationException) {
-        Toast.makeText(context, "Stream resolution timed out", Toast.LENGTH_LONG).show()
+        audioEngine.playOnlineTrack(online)
     } catch (e: Exception) {
-        Toast.makeText(context, "Error: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "Failed to resolve stream: ${e.localizedMessage ?: e.message}", Toast.LENGTH_LONG).show()
     }
 }
 
@@ -389,7 +351,7 @@ fun MainScreen() {
                         onTrackClick = { track -> audioEngine.playTrack(track) },
                         onOnlineTrackClick = { online ->
                             coroutineScope.launch {
-                                playOnlineTrack(online, context, audioEngine, innerTubeRepo, coroutineScope)
+                                playOnlineTrack(online, context, audioEngine)
                             }
                         },
                         onProfileClick = { selectedTab = 5 },
@@ -425,7 +387,7 @@ fun MainScreen() {
                         onTrackClick = { track -> audioEngine.playTrack(track) },
                         onOnlineTrackClick = { online ->
                             coroutineScope.launch {
-                                playOnlineTrack(online, context, audioEngine, innerTubeRepo, coroutineScope)
+                                playOnlineTrack(online, context, audioEngine)
                             }
                         },
                         onDownloadOnlineTrack = { online ->
