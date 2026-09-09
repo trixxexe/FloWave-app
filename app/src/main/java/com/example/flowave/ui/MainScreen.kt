@@ -42,6 +42,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 private suspend fun playOnlineTrack(
     online: InnerTubeTrack,
@@ -94,6 +96,17 @@ fun MainScreen() {
     var accumulatedTimeMs by remember { mutableLongStateOf(0L) }
 
     val playbackState by audioEngine.playbackState.collectAsStateWithLifecycle()
+
+    val importAudioLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            coroutineScope.launch {
+                val imported = repository.importAudioUris(uris)
+                Toast.makeText(context, "Imported ${imported.size} audio file${if (imported.size == 1) "" else "s"}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // BackHandler: Single tap as redirector to previous page, Double tap on Home to exit app
     BackHandler(enabled = true) {
@@ -238,15 +251,12 @@ fun MainScreen() {
                                 onPlayPauseClick = { audioEngine.togglePlayPause() },
                                 onNextClick = { audioEngine.playNext() },
                                 onFavoriteClick = {
-                                    playbackState.currentTrack?.let { track ->
-                                        coroutineScope.launch {
-                                            repository.toggleFavorite(track)
-                                            Toast.makeText(context, "Favorites updated", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
+                                    audioEngine.toggleCurrentFavorite()
+                                    Toast.makeText(context, "Favorites updated", Toast.LENGTH_SHORT).show()
                                 },
                                 onExpandClick = { isPlayerExpanded = true },
                                 onCloseClick = { isMiniPlayerDismissed = true },
+                                onRetryClick = { audioEngine.retryCurrentTrack() },
                                 onSeek = { pos -> audioEngine.seekTo(pos) }
                             )
                         }
@@ -407,6 +417,9 @@ fun MainScreen() {
                                 repository.scanMediaStore()
                                 Toast.makeText(context, "Scanned storage for audio tracks", Toast.LENGTH_SHORT).show()
                             }
+                        },
+                        onImportFilesClick = {
+                            importAudioLauncher.launch(arrayOf("audio/*"))
                         },
                         onSearchQueryChange = { query ->
                             if (query.isNotEmpty()) {

@@ -397,6 +397,13 @@ fun PlayerScreen(
             val currentProgress = if (isUserSeeking) sliderPos else (posMs.toFloat() / durMs.toFloat()).coerceIn(0f, 1f)
 
             Column(modifier = Modifier.fillMaxWidth()) {
+                if (playbackState.isBuffering) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(3.dp),
+                        color = CyanNeon,
+                        trackColor = Color.Transparent
+                    )
+                }
                 Slider(
                     value = currentProgress,
                     onValueChange = {
@@ -421,6 +428,19 @@ fun PlayerScreen(
                 ) {
                     Text(text = formatMs(if (isUserSeeking) (sliderPos * durMs).toLong() else posMs), color = TextMuted, fontSize = 12.sp)
                     Text(text = formatMs(durMs), color = TextMuted, fontSize = 12.sp)
+                }
+            }
+
+            playbackState.errorMessage?.let {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Playback failed", color = Color(0xFFFF9E9E), fontSize = 12.sp)
+                    TextButton(onClick = { audioEngine.retryCurrentTrack() }) {
+                        Text("Retry", color = CyanNeon)
+                    }
                 }
             }
 

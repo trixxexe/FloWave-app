@@ -34,6 +34,7 @@ fun LibraryScreen(
     onOnlineTrackClick: (InnerTubeTrack) -> Unit,
     onDownloadOnlineTrack: (InnerTubeTrack) -> Unit,
     onScanStorageClick: () -> Unit,
+    onImportFilesClick: () -> Unit = {},
     onSearchQueryChange: (String) -> Unit,
     onEditTagClick: (Track) -> Unit,
     onToggleFavoriteClick: (Track) -> Unit,
@@ -62,15 +63,28 @@ fun LibraryScreen(
         ) {
             Text("Music Library", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
 
-            Button(
-                onClick = onScanStorageClick,
-                colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("scan_storage_btn")
-            ) {
-                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Scan Files", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    onClick = onImportFilesClick,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.testTag("import_files_btn")
+                ) {
+                    Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Import", fontSize = 12.sp)
+                }
+                Button(
+                    onClick = onScanStorageClick,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.testTag("scan_storage_btn")
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Scan", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
 

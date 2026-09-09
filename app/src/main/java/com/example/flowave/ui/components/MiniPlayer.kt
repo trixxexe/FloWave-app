@@ -40,6 +40,7 @@ fun MiniPlayer(
     onFavoriteClick: () -> Unit,
     onExpandClick: () -> Unit,
     onCloseClick: () -> Unit,
+    onRetryClick: () -> Unit = {},
     onSeek: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -167,6 +168,26 @@ fun MiniPlayer(
                         tint = TextMuted,
                         modifier = Modifier.size(16.dp)
                     )
+                }
+            }
+
+            if (playbackState.isBuffering) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    color = CyanNeon,
+                    trackColor = Color.Transparent
+                )
+            }
+            playbackState.errorMessage?.let { message ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Playback unavailable", color = Color(0xFFFF9E9E), fontSize = 10.sp, maxLines = 1)
+                    TextButton(onClick = onRetryClick, contentPadding = PaddingValues(0.dp)) {
+                        Text("Retry", color = CyanNeon, fontSize = 11.sp)
+                    }
                 }
             }
 

@@ -217,4 +217,76 @@ class FloWaveRepository(private val context: Context) {
         }
         localList
     }
+
+    /** Imports an audio document without copying it; the persisted SAF URI is the playback source. */
+    suspend fun importAudioUri(uri: android.net.Uri): Track? = withContext(Dispatchers.IO) {
+        try {
+            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+
+            val resolver = context.contentResolver
+            val displayName = resolver.query(
+                uri,
+                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+            val retriever = android.media.MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(context, uri)
+                val fallbackTitle = displayName?.substringBeforeLast('.')?.ifBlank { "Imported Track" }
+                    ?: "Imported Track"
+                val title = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
+                    ?.takeIf { it.isNotBlank() } ?: fallbackTitle
+                val artist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                    ?.takeIf { it.isNotBlank() } ?: "Unknown Artist"
+                val album = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                    ?.takeIf { it.isNotBlank() } ?: "Unknown Album"
+                val duration = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull() ?: 0L
+                val artworkUri = retriever.embeddedPicture?.let { bytes ->
+                    val artwork = File(context.cacheDir, "artwork_${uri.toString().hashCode()}.jpg")
+                    artwork.writeBytes(bytes)
+                    android.net.Uri.fromFile(artwork).toString()
+                }
+                val stableId = "imported_${uri.toString().hashCode().toUInt().toString(16)}"
+                val track = Track(
+                    id = stableId,
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    durationMs = duration,
+                    mediaUri = uri.toString(),
+                    artworkUri = artworkUri,
+                    source = "IMPORTED",
+                    folderPath = "Imported audio"
+                )
+                trackDao.insertTrack(track)
+                track
+            } finally {
+                retriever.release()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("FloWaveRepository", "Could not import audio URI $uri", e)
+            null
+        }
+    }
+
+    suspend fun importAudioUris(uris: List<android.net.Uri>): List<Track> = withContext(Dispatchers.IO) {
+        uris.mapNotNull { importAudioUri(it) }
+    }
+
+    suspend fun removeUnavailableImportedTracks(): Int = withContext(Dispatchers.IO) {
+        val removed = trackDao.getImportedTracks().filterNot { track ->
+            runCatching {
+                context.contentResolver.openAssetFileDescriptor(android.net.Uri.parse(track.mediaUri), "r")?.use { true }
+                    ?: false
+            }.getOrDefault(false)
+        }
+        removed.forEach { trackDao.deleteTrack(it) }
+        removed.size
+    }
 }

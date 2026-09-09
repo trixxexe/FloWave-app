@@ -16,5 +16,6 @@ data class QueueState(
     val currentQueueIndex: Int,
     val currentPositionMs: Long,
     val repeatMode: Int = 0,
-    val isShuffleEnabled: Boolean = false
+    val isShuffleEnabled: Boolean = false,
+    val isPlaying: Boolean = false
 )

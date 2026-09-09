@@ -187,13 +187,8 @@ class InnerTubeRepository(context: Context? = null) {
         throw lastException ?: IOException("Request execution failed after $maxRetries attempts")
     }
 
-    private fun isStreamUrlExpired(url: String): Boolean {
-        if (!url.contains("expire=")) return false
-        val expireStr = url.substringAfter("expire=").substringBefore("&")
-        val expireTimeSec = expireStr.toLongOrNull() ?: return false
-        // Expired if within 5 minutes of expiration
-        return (expireTimeSec - 300) < (System.currentTimeMillis() / 1000)
-    }
+    private fun isStreamUrlExpired(url: String): Boolean =
+        com.example.flowave.audio.OnlinePlaybackPolicy.isExpired(url)
 
     suspend fun searchTracks(query: String): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
