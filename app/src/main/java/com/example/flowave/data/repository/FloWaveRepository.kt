@@ -130,14 +130,19 @@ class FloWaveRepository(private val context: Context) {
                     val albumId = cursor.getLong(albumIdCol)
                     val filePath = if (dataCol >= 0) cursor.getString(dataCol) ?: "" else ""
                     val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
+                    val contentUri = ContentUris.withAppendedId(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        id
+                    )
 
                     // Robust local metadata extraction: Prefer actual tags via MediaMetadataRetriever
                     // if standard MediaStore returns "<unknown>" or empty.
                     val file = java.io.File(filePath)
-                    if (file.exists() && file.isFile) {
+                    if (file.exists() && file.isFile || filePath.isBlank()) {
                         val retriever = android.media.MediaMetadataRetriever()
                         try {
-                            retriever.setDataSource(filePath)
+                            if (file.exists() && file.isFile) retriever.setDataSource(filePath)
+                            else retriever.setDataSource(context, contentUri)
                             val metaTitle = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
                             val metaArtist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)
                             val metaAlbum = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)
@@ -178,11 +183,6 @@ class FloWaveRepository(private val context: Context) {
                         album = "Unknown Album"
                     }
 
-                    val contentUri = ContentUris.withAppendedId(
-                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                        id
-                    ).toString()
-
                     val albumArtUri = ContentUris.withAppendedId(
                         android.net.Uri.parse("content://media/external/audio/albumart"),
                         albumId
@@ -194,7 +194,7 @@ class FloWaveRepository(private val context: Context) {
                         artist = artist,
                         album = album,
                         durationMs = duration,
-                        mediaUri = contentUri,
+                        mediaUri = contentUri.toString(),
                         artworkUri = albumArtUri,
                         isOnline = false,
                         source = "LOCAL",

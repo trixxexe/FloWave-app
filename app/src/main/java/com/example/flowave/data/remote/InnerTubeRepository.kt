@@ -21,6 +21,8 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class InnerTubeClientConfig(
     val clientName: String,
@@ -87,6 +89,7 @@ class InnerTubeRepository(context: Context? = null) {
 
     // Cache stream URLs for 2 hours to avoid re-querying YouTube endpoints
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
+    private val streamResolutionLocks = ConcurrentHashMap<String, Mutex>()
     val streamDurationCache = ConcurrentHashMap<String, Long>()
 
     fun getCachedDuration(videoId: String): Long {
@@ -451,7 +454,12 @@ class InnerTubeRepository(context: Context? = null) {
         }
     }
 
-    suspend fun getStreamUrl(videoId: String, forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
+    suspend fun getStreamUrl(videoId: String, forceRefresh: Boolean = false): String {
+        val lock = streamResolutionLocks.computeIfAbsent(videoId) { Mutex() }
+        return lock.withLock { getStreamUrlInternal(videoId, forceRefresh) }
+    }
+
+    private suspend fun getStreamUrlInternal(videoId: String, forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
         cleanExpiredStreamCache()
         if (forceRefresh) {
             streamUrlCache.remove(videoId)
@@ -472,7 +480,7 @@ class InnerTubeRepository(context: Context? = null) {
                     if (resolvedTracks.isNotEmpty()) {
                         val realVideoId = resolvedTracks.first().id
                         android.util.Log.d("InnerTubeRepository", "Resolved featured track $videoId to YouTube video ID: $realVideoId")
-                        return@withContext getStreamUrl(realVideoId, forceRefresh)
+                        return@withContext getStreamUrlInternal(realVideoId, forceRefresh)
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("InnerTubeRepository", "Failed to dynamically resolve featured track $videoId: ${e.message}", e)

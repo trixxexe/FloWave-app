@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.flowave.data.model.InnerTubeTrack
+import com.example.flowave.data.model.Playlist
 import com.example.flowave.data.model.Track
 import com.example.flowave.ui.components.GlassCard
 import com.example.flowave.ui.theme.*
@@ -38,6 +39,10 @@ fun LibraryScreen(
     onSearchQueryChange: (String) -> Unit,
     onEditTagClick: (Track) -> Unit,
     onToggleFavoriteClick: (Track) -> Unit,
+    recentlyPlayedTracks: List<Track> = emptyList(),
+    playlists: List<Playlist> = emptyList(),
+    onCreatePlaylist: (String) -> Unit = {},
+    onPlayPlaylist: (Playlist) -> Unit = {},
     onPlayQueue: ((List<Track>, Int) -> Unit)? = null,
     onAddToQueueNext: ((Track) -> Unit)? = null,
     onAddToQueueLast: ((Track) -> Unit)? = null,
@@ -47,6 +52,8 @@ fun LibraryScreen(
     var selectedTab by remember { mutableStateOf(0) } // 0: Local Songs, 1: Folders, 2: Online Search, 3: Favorites
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var folderSortBy by remember { mutableStateOf("Title") } // "Title", "Artist"
+    var showCreatePlaylist by remember { mutableStateOf(false) }
+    var playlistName by remember { mutableStateOf("") }
 
     Column(
         modifier = modifier
@@ -127,7 +134,7 @@ fun LibraryScreen(
         Spacer(modifier = Modifier.height(14.dp))
 
         // Tabs Row
-        TabRow(
+        ScrollableTabRow(
             selectedTabIndex = selectedTab,
             containerColor = Color.Transparent,
             contentColor = CyanNeon,
@@ -153,6 +160,10 @@ fun LibraryScreen(
                 onClick = { selectedTab = 3 },
                 text = { Text("Favorites", fontSize = 12.sp, color = if (selectedTab == 3) CyanNeon else TextMuted) }
             )
+            Tab(selected = selectedTab == 4, onClick = { selectedTab = 4 }, text = { Text("Recent", fontSize = 12.sp) })
+            Tab(selected = selectedTab == 5, onClick = { selectedTab = 5 }, text = { Text("Artists", fontSize = 12.sp) })
+            Tab(selected = selectedTab == 6, onClick = { selectedTab = 6 }, text = { Text("Albums", fontSize = 12.sp) })
+            Tab(selected = selectedTab == 7, onClick = { selectedTab = 7 }, text = { Text("Playlists", fontSize = 12.sp) })
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -359,8 +370,115 @@ fun LibraryScreen(
                         }
                     }
                 }
+
+                4 -> {
+                    if (recentlyPlayedTracks.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Your recently played songs will appear here.", color = TextMuted)
+                        }
+                    } else {
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(recentlyPlayedTracks, key = { it.id }) { track ->
+                                TrackListItem(track, { onTrackClick(track) }, { onEditTagClick(track) }, { onToggleFavoriteClick(track) })
+                            }
+                        }
+                    }
+                }
+
+                5 -> {
+                    val artists = localTracks.groupBy { it.artist.ifBlank { "Unknown Artist" } }
+                    if (artists.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No artists indexed yet.", color = TextMuted) }
+                    } else {
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(artists.keys.sorted(), key = { it }) { artist ->
+                                val tracks = artists[artist].orEmpty()
+                                GlassCard(Modifier.fillMaxWidth().clickable { onPlayQueue?.invoke(tracks, 0) }, 16.dp) {
+                                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Person, null, tint = CyanNeon, modifier = Modifier.size(30.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(artist, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                            Text("${tracks.size} songs", color = TextMuted, fontSize = 12.sp)
+                                        }
+                                        Icon(Icons.Default.PlayArrow, "Play artist", tint = CyanNeon)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                6 -> {
+                    val albums = localTracks.groupBy { "${it.album.ifBlank { "Unknown Album" }}\u0000${it.artist}" }
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(albums.keys.sorted(), key = { it }) { key ->
+                            val tracks = albums[key].orEmpty()
+                            val first = tracks.firstOrNull()
+                            if (first != null) {
+                                GlassCard(Modifier.fillMaxWidth().clickable { onPlayQueue?.invoke(tracks, 0) }, 16.dp) {
+                                    Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        AsyncImage(first.artworkUri, null, contentScale = ContentScale.Crop, modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(first.album, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                            Text("${first.artist} • ${tracks.size} songs", color = TextMuted, fontSize = 12.sp)
+                                        }
+                                        Icon(Icons.Default.PlayArrow, "Play album", tint = CyanNeon)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                7 -> {
+                    Column(Modifier.fillMaxSize()) {
+                        Button(
+                            onClick = { showCreatePlaylist = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Create playlist") }
+                        Spacer(Modifier.height(10.dp))
+                        if (playlists.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Create a playlist to organize your music.", color = TextMuted) }
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(playlists, key = { it.id }) { playlist ->
+                                    GlassCard(Modifier.fillMaxWidth().clickable { onPlayPlaylist(playlist) }, 16.dp) {
+                                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.QueueMusic, null, tint = CyanNeon, modifier = Modifier.size(30.dp))
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(playlist.name, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                                Text(playlist.description.ifBlank { "Personal playlist" }, color = TextMuted, fontSize = 12.sp)
+                                            }
+                                            Icon(Icons.Default.PlayArrow, "Play playlist", tint = CyanNeon)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    if (showCreatePlaylist) {
+        AlertDialog(
+            onDismissRequest = { showCreatePlaylist = false },
+            title = { Text("New playlist") },
+            text = { OutlinedTextField(playlistName, { playlistName = it }, label = { Text("Playlist name") }, singleLine = true) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (playlistName.isNotBlank()) onCreatePlaylist(playlistName.trim())
+                    playlistName = ""
+                    showCreatePlaylist = false
+                }) { Text("Create", color = CyanNeon) }
+            },
+            dismissButton = { TextButton(onClick = { showCreatePlaylist = false }) { Text("Cancel") } }
+        )
     }
 }
 

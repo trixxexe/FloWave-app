@@ -570,6 +570,7 @@ class FloWaveAudioEngine(private val context: Context) {
     fun stopPlayback() {
         onlineRecoveryJob?.cancel()
         onlineRecoveryJob = null
+        trackRetryCount.clear()
         try {
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
@@ -578,6 +579,7 @@ class FloWaveAudioEngine(private val context: Context) {
         }
         stopProgressLoop()
         _playbackState.value = PlaybackState()
+        persistQueueAndState()
     }
 
     @OptIn(UnstableApi::class)

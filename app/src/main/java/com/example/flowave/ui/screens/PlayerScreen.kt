@@ -381,8 +381,17 @@ fun PlayerScreen(
                     }
                 }
 
-                IconButton(onClick = { showSpeedDialog = true }) {
-                    Icon(Icons.Default.Speed, contentDescription = "Speed", tint = CyanNeon)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { audioEngine.toggleCurrentFavorite() }) {
+                        Icon(
+                            if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorite",
+                            tint = if (track.isFavorite) CyanNeon else TextMuted
+                        )
+                    }
+                    IconButton(onClick = { showSpeedDialog = true }) {
+                        Icon(Icons.Default.Speed, contentDescription = "Speed", tint = CyanNeon)
+                    }
                 }
             }
 

@@ -40,6 +40,7 @@ import com.example.flowave.ui.theme.*
 import com.example.flowave.utils.SettingsSchema
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -71,6 +72,8 @@ fun MainScreen() {
 
     val localTracks by repository.allTracks.collectAsStateWithLifecycle(initialValue = emptyList())
     val offlineTracks = remember(localTracks) { localTracks.filterNot { it.isOnline } }
+    val recentlyPlayedTracks by repository.recentlyPlayedTracks.collectAsStateWithLifecycle(initialValue = emptyList())
+    val playlists by repository.allPlaylists.collectAsStateWithLifecycle(initialValue = emptyList())
     val totalTimeMs by repository.totalListeningTimeMs.collectAsStateWithLifecycle(initialValue = 0L)
     val totalPlayCount by repository.totalPlayCount.collectAsStateWithLifecycle(initialValue = 0)
     val downloadEntries by downloader.allDownloadEntries.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -130,7 +133,10 @@ fun MainScreen() {
         // Index local media immediately. Home must remain useful when the
         // device is offline or the online resolver is unavailable.
         launch {
-            runCatching { repository.scanMediaStore() }
+            runCatching {
+                repository.removeUnavailableImportedTracks()
+                repository.scanMediaStore()
+            }
                 .onFailure { android.util.Log.w("MainScreen", "Local media scan failed", it) }
         }
         launch {
@@ -440,6 +446,18 @@ fun MainScreen() {
                             coroutineScope.launch {
                                 repository.toggleFavorite(track)
                                 Toast.makeText(context, "Favorite updated", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        recentlyPlayedTracks = recentlyPlayedTracks,
+                        playlists = playlists,
+                        onCreatePlaylist = { name ->
+                            coroutineScope.launch { repository.createPlaylist(name) }
+                        },
+                        onPlayPlaylist = { playlist ->
+                            coroutineScope.launch {
+                                val tracks = repository.getTracksForPlaylist(playlist.id).first()
+                                if (tracks.isNotEmpty()) audioEngine.setQueueAndPlay(tracks, 0)
+                                else Toast.makeText(context, "This playlist is empty", Toast.LENGTH_SHORT).show()
                             }
                         }
                     )
