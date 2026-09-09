@@ -89,16 +89,6 @@ class InnerTubeRepository(context: Context? = null) {
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
     val streamDurationCache = ConcurrentHashMap<String, Long>()
 
-    companion object {
-        @Volatile
-        private var instance: InnerTubeRepository? = null
-
-        fun getInstance(context: Context): InnerTubeRepository =
-            instance ?: synchronized(this) {
-                instance ?: InnerTubeRepository(context.applicationContext).also { instance = it }
-            }
-    }
-
     fun getCachedDuration(videoId: String): Long {
         return streamDurationCache[videoId] ?: 0L
     }
@@ -937,6 +927,14 @@ class InnerTubeRepository(context: Context? = null) {
     }
 
     companion object {
+        @Volatile
+        private var instance: InnerTubeRepository? = null
+
+        fun getInstance(context: Context): InnerTubeRepository =
+            instance ?: synchronized(this) {
+                instance ?: InnerTubeRepository(context.applicationContext).also { instance = it }
+            }
+
         @Volatile
         var scrapedApiKey: String? = null
         @Volatile
