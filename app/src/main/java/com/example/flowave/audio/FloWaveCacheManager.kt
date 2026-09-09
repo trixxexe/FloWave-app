@@ -59,4 +59,13 @@ object FloWaveCacheManager {
             android.util.Log.e("FloWaveCacheManager", "Failed to release SimpleCache", e)
         }
     }
+
+    @Synchronized
+    fun invalidate(key: String) {
+        try {
+            cacheInstance?.removeResource(key)
+        } catch (e: Exception) {
+            android.util.Log.w("FloWaveCacheManager", "Failed to invalidate cache key $key", e)
+        }
+    }
 }

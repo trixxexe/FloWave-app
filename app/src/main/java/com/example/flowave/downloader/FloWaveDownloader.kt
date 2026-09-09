@@ -21,7 +21,7 @@ class FloWaveDownloader(
     private val repository: FloWaveRepository
 ) {
     private val downloadDao = AppDatabase.getDatabase(context).downloadDao()
-    private val innerTubeRepo = InnerTubeRepository(context)
+    private val innerTubeRepo = InnerTubeRepository.getInstance(context)
     private val sealEngine = SealStyleDownloadEngine()
 
     val allDownloadEntries: Flow<List<DownloadEntry>> = downloadDao.getAllDownloads()

@@ -64,7 +64,7 @@ fun MainScreen() {
     val repository = remember { FloWaveRepository(context) }
     val profileRepo = remember { ProfileRepository(context) }
     val audioEngine = remember { FloWaveAudioEngine.getInstance(context) }
-    val innerTubeRepo = remember { InnerTubeRepository(context) }
+    val innerTubeRepo = remember { InnerTubeRepository.getInstance(context) }
     val downloader = remember { FloWaveDownloader(context, repository) }
 
     val localTracks by repository.allTracks.collectAsStateWithLifecycle(initialValue = emptyList())

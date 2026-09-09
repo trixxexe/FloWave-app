@@ -19,6 +19,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import com.example.flowave.data.model.Track
@@ -32,6 +33,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.sin
@@ -73,7 +75,7 @@ data class EqualizerState(
 
 class FloWaveAudioEngine(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private val innerTubeRepo = InnerTubeRepository(context)
+    private val innerTubeRepo = InnerTubeRepository.getInstance(context)
     private val db = com.example.flowave.data.local.AppDatabase.getDatabase(context)
     private val queueDao = db.queueDao()
     private val trackDao = db.trackDao()
@@ -90,6 +92,7 @@ class FloWaveAudioEngine(private val context: Context) {
     private var presetReverb: PresetReverb? = null
 
     private var wasPlayingBeforeDisconnect = false
+    private var networkAvailable = true
     private var connectivityManager: android.net.ConnectivityManager? = null
     private val trackRetryCount = mutableMapOf<String, Int>()
     private var lastErrorToastTime = 0L
@@ -108,6 +111,26 @@ class FloWaveAudioEngine(private val context: Context) {
     private var progressJob: Job? = null
     private var playerListener: Player.Listener? = null
     private var onlineRecoveryJob: Job? = null
+
+    private fun canonicalTrack(track: Track): Track {
+        if (!track.isOnline) return track
+        val sourceId = track.sourceId?.takeIf { it.isNotBlank() }
+            ?: track.id.removePrefix("yt_").takeIf { it.isNotBlank() }
+            ?: return track
+        return track.copy(
+            sourceId = sourceId,
+            mediaUri = "flowave://youtube/$sourceId"
+        )
+    }
+
+    private fun httpStatusCode(error: PlaybackException): Int? {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is HttpDataSource.InvalidResponseCodeException) return cause.responseCode
+            cause = cause.cause
+        }
+        return null
+    }
 
     private fun updatePlaybackState(block: (PlaybackState) -> PlaybackState) {
         _playbackState.value = block(_playbackState.value)
@@ -130,7 +153,7 @@ class FloWaveAudioEngine(private val context: Context) {
                 // Online items are persisted by stable source ID. Their
                 // expiring URLs are never persisted as the playback URI is
                 // normalized to flowave://youtube/<videoId> below.
-                val persistableQueue = state.queue
+                val persistableQueue = state.queue.map(::canonicalTrack)
                 val currentIdx = state.currentQueueIndex.coerceIn(0, (persistableQueue.size - 1).coerceAtLeast(0))
                 val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
                 db.withTransaction {
@@ -184,7 +207,7 @@ class FloWaveAudioEngine(private val context: Context) {
                 
                 val tracks = dbItems.mapNotNull { item ->
                     trackDao.getTrackById(item.trackId)
-                }
+                }.map(::canonicalTrack)
                 
                 if (tracks.isNotEmpty()) {
                     withContext(Dispatchers.Main) {
@@ -254,9 +277,6 @@ class FloWaveAudioEngine(private val context: Context) {
                     }
 
                     override fun onPlaybackStateChanged(state: Int) {
-                        if (state == Player.STATE_ENDED) {
-                            playNext()
-                        }
                         updateFormatInfo()
                     }
 
@@ -298,6 +318,15 @@ class FloWaveAudioEngine(private val context: Context) {
                         val currentTrack = _playbackState.value.currentTrack
                         if (currentTrack != null && currentTrack.isOnline) {
                             if (onlineRecoveryJob?.isActive == true) return
+                            if (!networkAvailable) {
+                                wasPlayingBeforeDisconnect = true
+                                return
+                            }
+                            val httpStatus = httpStatusCode(error)
+                            android.util.Log.w(
+                                "FloWaveAudioEngine",
+                                "Online playback failure for ${currentTrack.id}; HTTP status=$httpStatus, media3Code=${error.errorCode}"
+                            )
                             val retries = trackRetryCount.getOrDefault(currentTrack.id, 0)
                             val currentPos = _playbackState.value.currentPositionMs
                             if (retries < 3) {
@@ -315,18 +344,23 @@ class FloWaveAudioEngine(private val context: Context) {
                                             return@launch
                                         }
                                         innerTubeRepo.invalidateStreamUrl(sourceId)
+                                        FloWaveCacheManager.invalidate(sourceId)
                                         val curIndex = exoPlayer?.currentMediaItemIndex ?: 0
+                                        // Let a new error event schedule the next recovery attempt.
+                                        if (onlineRecoveryJob === kotlinx.coroutines.currentCoroutineContext()[Job]) {
+                                            onlineRecoveryJob = null
+                                        }
                                         exoPlayer?.prepare()
                                         exoPlayer?.seekTo(curIndex, currentPos)
                                         exoPlayer?.play()
                                         android.util.Log.d("FloWaveAudioEngine", "Invalidated online stream and resumed lazy resolution")
                                         return@launch
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (e: Exception) {
                                         android.util.Log.e("FloWaveAudioEngine", "Failed to refresh expired URL mid-play: ${e.message}")
+                                        if (_playbackState.value.currentTrack?.id == currentTrack.id) playNext()
                                     }
-                                    
-                                    // Fallback: skip if refresh fails
-                                    playNext()
                                 }.also { job ->
                                     job.invokeOnCompletion { if (onlineRecoveryJob === job) onlineRecoveryJob = null }
                                 }
@@ -545,11 +579,12 @@ class FloWaveAudioEngine(private val context: Context) {
         if (queue.isEmpty()) return
         val player = exoPlayer ?: return
 
-        val playableEntries = queue.mapNotNull { track ->
+        val normalizedQueue = queue.map(::canonicalTrack)
+        val playableEntries = normalizedQueue.mapNotNull { track ->
             createMediaItem(track)?.let { mediaItem -> track to mediaItem }
         }
         if (playableEntries.isEmpty()) return
-        val requestedTrack = queue.getOrNull(startIndex)
+        val requestedTrack = normalizedQueue.getOrNull(startIndex)
         val effectiveIndex = playableEntries.indexOfFirst { it.first.id == requestedTrack?.id }
             .takeIf { it >= 0 } ?: 0
         val playableQueue = playableEntries.map { it.first }
@@ -572,12 +607,13 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun playTrack(track: Track) {
+        val normalizedTrack = canonicalTrack(track)
         val currentQueue = _playbackState.value.queue.toMutableList()
-        val index = currentQueue.indexOfFirst { it.id == track.id }
+        val index = currentQueue.indexOfFirst { it.id == normalizedTrack.id }
         if (index >= 0) {
             setQueueAndPlay(currentQueue, index)
         } else {
-            currentQueue.add(0, track)
+            currentQueue.add(0, normalizedTrack)
             setQueueAndPlay(currentQueue, 0)
         }
     }
@@ -597,8 +633,11 @@ class FloWaveAudioEngine(private val context: Context) {
             player.seekToNextMediaItem()
         } else {
             val queue = _playbackState.value.queue
-            if (queue.isNotEmpty()) {
+            if (queue.isNotEmpty() && _playbackState.value.repeatMode == Player.REPEAT_MODE_ALL) {
                 setQueueAndPlay(queue, 0)
+            } else {
+                player.pause()
+                persistQueueStateOnly()
             }
         }
     }
@@ -730,14 +769,14 @@ class FloWaveAudioEngine(private val context: Context) {
         val queue = _playbackState.value.queue.toMutableList()
         val currentIdx = _playbackState.value.currentQueueIndex
         val insertIndex = if (currentIdx in queue.indices) currentIdx + 1 else queue.size
-        queue.add(insertIndex, track)
+        queue.add(insertIndex, canonicalTrack(track))
         _playbackState.value = _playbackState.value.copy(queue = queue)
         persistQueueAndState()
     }
 
     fun addToQueueLast(track: Track) {
         val queue = _playbackState.value.queue.toMutableList()
-        queue.add(track)
+        queue.add(canonicalTrack(track))
         _playbackState.value = _playbackState.value.copy(queue = queue)
         persistQueueAndState()
     }
@@ -892,14 +931,19 @@ class FloWaveAudioEngine(private val context: Context) {
             networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
                     android.util.Log.d("FloWaveAudioEngine", "Internet connection restored. Recovering playback...")
+                    networkAvailable = true
                     scope.launch(Dispatchers.Main) {
                         val player = exoPlayer ?: return@launch
                         val currentTrack = _playbackState.value.currentTrack
                         if (currentTrack != null && currentTrack.isOnline) {
                             if (!player.isPlaying && wasPlayingBeforeDisconnect) {
                                 try {
+                                    val sourceId = currentTrack.sourceId ?: currentTrack.id.removePrefix("yt_")
+                                    innerTubeRepo.invalidateStreamUrl(sourceId)
+                                    FloWaveCacheManager.invalidate(sourceId)
                                     player.prepare()
                                     player.play()
+                                    wasPlayingBeforeDisconnect = false
                                 } catch (e: Exception) {
                                     android.util.Log.e("FloWaveAudioEngine", "Error preparing/playing on connection restore", e)
                                 }
@@ -910,6 +954,7 @@ class FloWaveAudioEngine(private val context: Context) {
 
                 override fun onLost(network: android.net.Network) {
                     android.util.Log.w("FloWaveAudioEngine", "Internet connection lost.")
+                    networkAvailable = false
                     val currentTrack = _playbackState.value.currentTrack
                     if (currentTrack != null && currentTrack.isOnline) {
                         wasPlayingBeforeDisconnect = exoPlayer?.isPlaying == true
@@ -935,6 +980,7 @@ class FloWaveAudioEngine(private val context: Context) {
     fun release() {
         onlineRecoveryJob?.cancel()
         onlineRecoveryJob = null
+        trackRetryCount.clear()
         try {
             scope.cancel()
         } catch (e: Exception) {

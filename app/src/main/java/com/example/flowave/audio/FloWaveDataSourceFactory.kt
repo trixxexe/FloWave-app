@@ -19,7 +19,7 @@ class FloWaveDataSourceFactory(
 ) : DataSource.Factory {
     private val cacheDataSourceFactory = FloWaveCacheManager.createCacheDataSourceFactory(context)
     private val defaultDataSourceFactory = DefaultDataSource.Factory(context)
-    private val streamRepository = InnerTubeRepository(context)
+    private val streamRepository = InnerTubeRepository.getInstance(context)
 
     override fun createDataSource(): DataSource {
         val cacheDataSource = cacheDataSourceFactory.createDataSource()
