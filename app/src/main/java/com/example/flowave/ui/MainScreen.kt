@@ -24,6 +24,7 @@ import coil.compose.AsyncImage
 import com.example.flowave.audio.FloWaveAudioEngine
 import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.LrcLine
+import com.example.flowave.data.model.Track
 import com.example.flowave.data.model.UserProfile
 import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.data.repository.FloWaveRepository
@@ -38,6 +39,7 @@ import com.example.flowave.ui.screens.*
 import com.example.flowave.ui.theme.*
 import com.example.flowave.utils.SettingsSchema
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.Context
 
