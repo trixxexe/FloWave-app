@@ -128,7 +128,10 @@ class FloWaveAudioEngine(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 val state = _playbackState.value
-                val persistableQueue = state.queue.filterNot { it.isOnline }
+                // Online items are persisted by stable source ID. Their
+                // expiring URLs are never persisted as the playback URI is
+                // normalized to flowave://youtube/<videoId> below.
+                val persistableQueue = state.queue
                 val currentIdx = state.currentQueueIndex.coerceIn(0, (persistableQueue.size - 1).coerceAtLeast(0))
                 val position = withContext(Dispatchers.Main) { exoPlayer?.currentPosition ?: 0L }
                 db.withTransaction {
@@ -307,47 +310,18 @@ class FloWaveAudioEngine(private val context: Context) {
                                     try {
                                         val sourceId = currentTrack.sourceId
                                             ?: currentTrack.id.removePrefix("yt_")
-                                        val sourceTrack = com.example.flowave.data.model.InnerTubeTrack(
-                                            id = sourceId,
-                                            title = currentTrack.title,
-                                            artist = currentTrack.artist,
-                                            durationText = "",
-                                            thumbnailUrl = currentTrack.artworkUri.orEmpty(),
-                                            album = currentTrack.album
-                                        )
-                                        val updatedTrack = withTimeout(45_000L) {
-                                            innerTubeRepo.resolveTrack(sourceTrack, forceRefresh = true)
-                                        }.copy(
-                                            durationMs = currentTrack.durationMs,
-                                            isFavorite = currentTrack.isFavorite
-                                        )
-
                                         // The user may have selected another item while the
                                         // refresh was running. Never overwrite that newer state.
                                         if (_playbackState.value.currentTrack?.id != currentTrack.id) {
                                             return@launch
                                         }
-                                        
-                                        // Update track in queue
-                                        val updatedQueue = _playbackState.value.queue.map {
-                                            if (it.id == currentTrack.id) updatedTrack else it
-                                        }
-                                        _playbackState.value = _playbackState.value.copy(
-                                            queue = updatedQueue,
-                                            currentTrack = updatedTrack
-                                        )
-                                        
-                                        // Re-prepare and play
-                                        val mediaItem = createMediaItem(updatedTrack)
-                                        if (mediaItem != null) {
-                                            val curIndex = exoPlayer?.currentMediaItemIndex ?: 0
-                                            exoPlayer?.replaceMediaItem(curIndex, mediaItem)
-                                            exoPlayer?.prepare()
-                                            exoPlayer?.seekTo(curIndex, currentPos)
-                                            exoPlayer?.play()
-                                            android.util.Log.d("FloWaveAudioEngine", "Successfully refreshed URL and resumed playback!")
-                                            return@launch
-                                        }
+                                        innerTubeRepo.invalidateStreamUrl(sourceId)
+                                        val curIndex = exoPlayer?.currentMediaItemIndex ?: 0
+                                        exoPlayer?.prepare()
+                                        exoPlayer?.seekTo(curIndex, currentPos)
+                                        exoPlayer?.play()
+                                        android.util.Log.d("FloWaveAudioEngine", "Invalidated online stream and resumed lazy resolution")
+                                        return@launch
                                     } catch (e: Exception) {
                                         android.util.Log.e("FloWaveAudioEngine", "Failed to refresh expired URL mid-play: ${e.message}")
                                     }
@@ -550,7 +524,12 @@ class FloWaveAudioEngine(private val context: Context) {
             }
         }
 
-        val uriStr = track.mediaUri ?: return null
+        val uriStr = if (track.isOnline) {
+            val sourceId = track.sourceId ?: track.id.removePrefix("yt_")
+            "flowave://youtube/$sourceId"
+        } else {
+            track.mediaUri
+        }
         val parsedUri = if (uriStr.startsWith("/") || !uriStr.contains("://")) {
             Uri.fromFile(java.io.File(uriStr))
         } else {

@@ -46,6 +46,7 @@ object FloWaveCacheManager {
         return CacheDataSource.Factory()
             .setCache(getCache(context))
             .setUpstreamDataSourceFactory(upstreamFactory)
+            .setCacheKeyFactory { _, dataSpec -> dataSpec.key ?: dataSpec.uri.toString() }
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 

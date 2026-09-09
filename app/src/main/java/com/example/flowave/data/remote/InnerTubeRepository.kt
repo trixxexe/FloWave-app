@@ -93,6 +93,10 @@ class InnerTubeRepository(context: Context? = null) {
         return streamDurationCache[videoId] ?: 0L
     }
 
+    fun invalidateStreamUrl(videoId: String) {
+        streamUrlCache.remove(videoId)
+    }
+
     fun parseDurationText(text: String): Long {
         val parts = text.split(":")
         var seconds = 0L
@@ -129,7 +133,9 @@ class InnerTubeRepository(context: Context? = null) {
             artist = track.artist,
             album = track.album.ifBlank { "Online Stream" },
             durationMs = durationMs,
-            mediaUri = streamUrl,
+            // Keep the stable source identifier in the MediaItem. The data
+            // source resolves a fresh expiring URL only when playback opens.
+            mediaUri = "flowave://youtube/${track.id}",
             artworkUri = track.thumbnailUrl,
             isOnline = true,
             source = "YOUTUBE",
