@@ -328,6 +328,18 @@ fun PlayerScreen(
                                             Text(item.artist, color = TextMuted, fontSize = 12.sp, maxLines = 1)
                                         }
                                         Row {
+                                            IconButton(
+                                                onClick = { if (idx > 0) audioEngine.reorderQueue(idx, idx - 1) },
+                                                enabled = idx > 0
+                                            ) {
+                                                Icon(Icons.Default.KeyboardArrowUp, "Move up", tint = if (idx > 0) CyanNeon else TextMuted, modifier = Modifier.size(20.dp))
+                                            }
+                                            IconButton(
+                                                onClick = { if (idx < playbackState.queue.lastIndex) audioEngine.reorderQueue(idx, idx + 1) },
+                                                enabled = idx < playbackState.queue.lastIndex
+                                            ) {
+                                                Icon(Icons.Default.KeyboardArrowDown, "Move down", tint = if (idx < playbackState.queue.lastIndex) CyanNeon else TextMuted, modifier = Modifier.size(20.dp))
+                                            }
                                             IconButton(onClick = { audioEngine.removeFromQueue(idx) }) {
                                                 Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextMuted, modifier = Modifier.size(20.dp))
                                             }

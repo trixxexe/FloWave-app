@@ -187,7 +187,9 @@ fun LibraryScreen(
                                     track = track,
                                     onTrackClick = { onTrackClick(track) },
                                     onEditTagClick = { onEditTagClick(track) },
-                                    onFavoriteClick = { onToggleFavoriteClick(track) }
+                                    onFavoriteClick = { onToggleFavoriteClick(track) },
+                                    onPlayNext = { onAddToQueueNext?.invoke(track) },
+                                    onPlayLast = { onAddToQueueLast?.invoke(track) }
                                 )
                             }
                         }
@@ -364,7 +366,9 @@ fun LibraryScreen(
                                     track = track,
                                     onTrackClick = { onTrackClick(track) },
                                     onEditTagClick = { onEditTagClick(track) },
-                                    onFavoriteClick = { onToggleFavoriteClick(track) }
+                                    onFavoriteClick = { onToggleFavoriteClick(track) },
+                                    onPlayNext = { onAddToQueueNext?.invoke(track) },
+                                    onPlayLast = { onAddToQueueLast?.invoke(track) }
                                 )
                             }
                         }
@@ -379,7 +383,14 @@ fun LibraryScreen(
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(recentlyPlayedTracks, key = { it.id }) { track ->
-                                TrackListItem(track, { onTrackClick(track) }, { onEditTagClick(track) }, { onToggleFavoriteClick(track) })
+                                TrackListItem(
+                                    track,
+                                    { onTrackClick(track) },
+                                    { onEditTagClick(track) },
+                                    { onToggleFavoriteClick(track) },
+                                    { onAddToQueueNext?.invoke(track) },
+                                    { onAddToQueueLast?.invoke(track) }
+                                )
                             }
                         }
                     }
@@ -487,7 +498,9 @@ fun TrackListItem(
     track: Track,
     onTrackClick: () -> Unit,
     onEditTagClick: () -> Unit,
-    onFavoriteClick: () -> Unit
+    onFavoriteClick: () -> Unit,
+    onPlayNext: () -> Unit = {},
+    onPlayLast: () -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
@@ -544,6 +557,16 @@ fun TrackListItem(
                             onEditTagClick()
                         },
                         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = CyanNeon) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Play next", color = TextPrimary) },
+                        onClick = { showMenu = false; onPlayNext() },
+                        leadingIcon = { Icon(Icons.Default.SkipNext, null, tint = CyanNeon) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Add to queue", color = TextPrimary) },
+                        onClick = { showMenu = false; onPlayLast() },
+                        leadingIcon = { Icon(Icons.Default.QueueMusic, null, tint = CyanNeon) }
                     )
                 }
             }
