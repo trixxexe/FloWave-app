@@ -128,18 +128,7 @@ object SettingsSchema {
     )
 
     fun getDefaultJson(): String {
-        val json = JSONObject()
-        for (def in DEFINITIONS) {
-            when (def.type) {
-                SettingType.BOOLEAN -> json.put(def.key, def.defaultValue.toBoolean())
-                SettingType.INT -> json.put(def.key, def.defaultValue.toIntOrNull() ?: 0)
-                SettingType.FLOAT -> json.put(def.key, def.defaultValue.toFloatOrNull() ?: 0.0f)
-                else -> json.put(def.key, def.defaultValue)
-            }
-        }
-        // The one-argument form is also available in the plain JVM test runtime;
-        // Android's pretty-print overload is not implemented by some stubs.
-        return json.toString()?.takeIf { it.isNotBlank() } ?: "{}"
+        return serialize(DEFINITIONS.associate { it.key to typedDefault(it) })
     }
 
     fun getValue(jsonStr: String, key: String): String {
@@ -157,8 +146,37 @@ object SettingsSchema {
     }
 
     fun updateValue(jsonStr: String, key: String, value: Any): String {
-        val json = try { JSONObject(jsonStr) } catch (e: Exception) { JSONObject() }
-        json.put(key, value)
-        return json.toString()?.takeIf { it.isNotBlank() } ?: jsonStr
+        val source = try { JSONObject(jsonStr) } catch (e: Exception) { JSONObject() }
+        val values = DEFINITIONS.associate { def ->
+            def.key to if (def.key == key) value else source.opt(def.key).takeUnless { it == JSONObject.NULL } ?: typedDefault(def)
+        }
+        return serialize(values)
     }
+
+    private fun typedDefault(def: SettingDefinition): Any = when (def.type) {
+        SettingType.BOOLEAN -> def.defaultValue.toBoolean()
+        SettingType.INT -> def.defaultValue.toIntOrNull() ?: 0
+        SettingType.FLOAT -> def.defaultValue.toFloatOrNull() ?: 0f
+        else -> def.defaultValue
+    }
+
+    private fun serialize(values: Map<String, Any?>): String = values.entries.joinToString(
+        separator = ",",
+        prefix = "{",
+        postfix = "}"
+    ) { (key, value) ->
+        "\"${escape(key)}\":${encode(value)}"
+    }
+
+    private fun encode(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        is Boolean, is Number -> value.toString()
+        else -> "\"${escape(value.toString())}\""
+    }
+
+    private fun escape(value: String): String = value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
 }
