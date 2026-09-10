@@ -231,7 +231,7 @@ class FloWaveRepository(private val context: Context) {
     }
 
     /** Imports an audio document without copying it; the persisted SAF URI is the playback source. */
-    suspend fun importAudioUri(uri: android.net.Uri): Track? = withContext(Dispatchers.IO) {
+    suspend fun importAudioUri(uri: android.net.Uri, importedFolder: String? = null): Track? = withContext(Dispatchers.IO) {
         try {
             persistReadPermission(uri)
 
@@ -281,7 +281,7 @@ class FloWaveRepository(private val context: Context) {
                     mediaUri = uri.toString(),
                     artworkUri = artworkUri,
                     source = "IMPORTED",
-                    folderPath = "Imported audio"
+                    folderPath = importedFolder ?: "Imported audio"
                 )
                 val previous = trackDao.getTrackById(stableId)
                 val merged = previous?.let {
@@ -310,11 +310,11 @@ class FloWaveRepository(private val context: Context) {
     suspend fun importAudioTree(treeUri: android.net.Uri): List<Track> = withContext(Dispatchers.IO) {
         persistReadPermission(treeUri)
         val resolver = context.contentResolver
-        val pending = ArrayDeque<android.net.Uri>()
-        val files = mutableListOf<android.net.Uri>()
-        pending.add(treeUri)
+        val pending = ArrayDeque<Pair<android.net.Uri, String>>()
+        val files = mutableListOf<Pair<android.net.Uri, String>>()
+        pending.add(treeUri to "Imported audio")
         while (pending.isNotEmpty()) {
-            val parent = pending.removeFirst()
+            val (parent, folderPath) = pending.removeFirst()
             val parentId = runCatching { DocumentsContract.getDocumentId(parent) }.getOrNull() ?: continue
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parent, parentId)
             runCatching {
@@ -336,15 +336,15 @@ class FloWaveRepository(private val context: Context) {
                         val mime = cursor.getString(mimeIndex).orEmpty()
                         val child = DocumentsContract.buildDocumentUriUsingTree(parent, id)
                         if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                            pending.add(child)
+                            pending.add(child to (folderPath + "/" + name.ifBlank { "Folder" }))
                         } else if (mime.startsWith("audio/") || LocalTrackIdentity.isSupportedAudioName(name)) {
-                            files.add(child)
+                            files.add(child to folderPath)
                         }
                     }
                 }
             }.onFailure { android.util.Log.w("FloWaveRepository", "Could not enumerate SAF directory", it) }
         }
-        files.distinctBy { it.toString() }.mapNotNull { importAudioUri(it) }
+        files.distinctBy { it.first.toString() }.mapNotNull { (uri, folder) -> importAudioUri(uri, folder) }
     }
 
     private fun persistReadPermission(uri: android.net.Uri) {
