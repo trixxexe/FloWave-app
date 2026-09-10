@@ -3,6 +3,7 @@ package com.example.flowave.data.repository
 import android.content.ContentUris
 import android.content.Context
 import android.provider.MediaStore
+import android.provider.DocumentsContract
 import com.example.flowave.data.local.AppDatabase
 import com.example.flowave.data.model.ListeningStat
 import com.example.flowave.data.model.Playlist
@@ -12,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.ArrayDeque
 
 class FloWaveRepository(private val context: Context) {
     private val db = AppDatabase.getDatabase(context)
@@ -99,7 +101,8 @@ class FloWaveRepository(private val context: Context) {
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.DATA,
-            MediaStore.Audio.Media.RELATIVE_PATH
+            MediaStore.Audio.Media.RELATIVE_PATH,
+            MediaStore.Audio.Media.DISPLAY_NAME
         )
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         
@@ -120,6 +123,7 @@ class FloWaveRepository(private val context: Context) {
                 val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
                 val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
                 val relativePathCol = cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+                val displayNameCol = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
 
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idCol)
@@ -130,6 +134,7 @@ class FloWaveRepository(private val context: Context) {
                     val albumId = cursor.getLong(albumIdCol)
                     val filePath = if (dataCol >= 0) cursor.getString(dataCol) ?: "" else ""
                     val relativePath = if (relativePathCol >= 0) cursor.getString(relativePathCol) else null
+                    val displayName = if (displayNameCol >= 0) cursor.getString(displayNameCol) else null
                     val contentUri = ContentUris.withAppendedId(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                         id
@@ -173,15 +178,12 @@ class FloWaveRepository(private val context: Context) {
                     }
 
                     // Ultimate fallback to filename if still unknown or blank
-                    if (title.isBlank() || title.trim().equals("<unknown>", ignoreCase = true)) {
-                        title = file.nameWithoutExtension.ifBlank { "Track $id" }
-                    }
-                    if (artist.isBlank() || artist.trim().equals("<unknown>", ignoreCase = true)) {
-                        artist = "Unknown Artist"
-                    }
-                    if (album.isBlank() || album.trim().equals("<unknown>", ignoreCase = true)) {
-                        album = "Unknown Album"
-                    }
+                    title = LocalTrackIdentity.cleanMetadata(
+                        title,
+                        LocalTrackIdentity.fallbackTitle(displayName ?: file.name, "Track $id")
+                    )
+                    artist = LocalTrackIdentity.cleanMetadata(artist, "Unknown Artist")
+                    album = LocalTrackIdentity.cleanMetadata(album, "Unknown Album")
 
                     val albumArtUri = ContentUris.withAppendedId(
                         android.net.Uri.parse("content://media/external/audio/albumart"),
@@ -210,10 +212,20 @@ class FloWaveRepository(private val context: Context) {
         if (queryCompleted) {
             // Refresh only the MediaStore-owned rows. Downloaded/imported rows
             // remain available offline and are never removed by a rescan.
+            val existingByUri = trackDao.getLocalTracks().associateBy { it.mediaUri }
+            val mergedLocalList = localList.map { fresh ->
+                existingByUri[fresh.mediaUri]?.let { existing ->
+                    fresh.copy(
+                        playCount = existing.playCount,
+                        lastPlayedTimestamp = existing.lastPlayedTimestamp,
+                        isFavorite = existing.isFavorite
+                    )
+                } ?: fresh
+            }
             trackDao.deleteLocalTracks()
-        }
-        if (localList.isNotEmpty()) {
-            trackDao.insertTracks(localList)
+            if (mergedLocalList.isNotEmpty()) {
+                trackDao.insertTracks(mergedLocalList)
+            }
         }
         localList
     }
@@ -221,8 +233,7 @@ class FloWaveRepository(private val context: Context) {
     /** Imports an audio document without copying it; the persisted SAF URI is the playback source. */
     suspend fun importAudioUri(uri: android.net.Uri): Track? = withContext(Dispatchers.IO) {
         try {
-            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, flags) }
+            persistReadPermission(uri)
 
             val resolver = context.contentResolver
             val displayName = resolver.query(
@@ -234,17 +245,25 @@ class FloWaveRepository(private val context: Context) {
             )?.use { cursor ->
                 if (cursor.moveToFirst()) cursor.getString(0) else null
             }
+            val mimeType = resolver.getType(uri)
+            if (mimeType != null && !mimeType.startsWith("audio/") &&
+                !LocalTrackIdentity.isSupportedAudioName(displayName.orEmpty())
+            ) {
+                return@withContext null
+            }
             val retriever = android.media.MediaMetadataRetriever()
             try {
                 retriever.setDataSource(context, uri)
-                val fallbackTitle = displayName?.substringBeforeLast('.')?.ifBlank { "Imported Track" }
-                    ?: "Imported Track"
-                val title = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
-                    ?.takeIf { it.isNotBlank() } ?: fallbackTitle
-                val artist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)
-                    ?.takeIf { it.isNotBlank() } ?: "Unknown Artist"
-                val album = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)
-                    ?.takeIf { it.isNotBlank() } ?: "Unknown Album"
+                val fallbackTitle = LocalTrackIdentity.fallbackTitle(displayName)
+                val title = LocalTrackIdentity.cleanMetadata(
+                    retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE), fallbackTitle
+                )
+                val artist = LocalTrackIdentity.cleanMetadata(
+                    retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST), "Unknown Artist"
+                )
+                val album = LocalTrackIdentity.cleanMetadata(
+                    retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM), "Unknown Album"
+                )
                 val duration = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
                     ?.toLongOrNull() ?: 0L
                 val artworkUri = retriever.embeddedPicture?.let { bytes ->
@@ -252,7 +271,7 @@ class FloWaveRepository(private val context: Context) {
                     artwork.writeBytes(bytes)
                     android.net.Uri.fromFile(artwork).toString()
                 }
-                val stableId = "imported_${uri.toString().hashCode().toUInt().toString(16)}"
+                val stableId = LocalTrackIdentity.stableId(uri.toString())
                 val track = Track(
                     id = stableId,
                     title = title,
@@ -264,8 +283,16 @@ class FloWaveRepository(private val context: Context) {
                     source = "IMPORTED",
                     folderPath = "Imported audio"
                 )
-                trackDao.insertTrack(track)
-                track
+                val previous = trackDao.getTrackById(stableId)
+                val merged = previous?.let {
+                    track.copy(
+                        playCount = it.playCount,
+                        lastPlayedTimestamp = it.lastPlayedTimestamp,
+                        isFavorite = it.isFavorite
+                    )
+                } ?: track
+                trackDao.insertTrack(merged)
+                merged
             } finally {
                 retriever.release()
             }
@@ -276,7 +303,57 @@ class FloWaveRepository(private val context: Context) {
     }
 
     suspend fun importAudioUris(uris: List<android.net.Uri>): List<Track> = withContext(Dispatchers.IO) {
-        uris.mapNotNull { importAudioUri(it) }
+        uris.distinctBy { it.toString() }.mapNotNull { importAudioUri(it) }
+    }
+
+    /** Imports all supported audio descendants of a persisted SAF tree URI. */
+    suspend fun importAudioTree(treeUri: android.net.Uri): List<Track> = withContext(Dispatchers.IO) {
+        persistReadPermission(treeUri)
+        val resolver = context.contentResolver
+        val pending = ArrayDeque<android.net.Uri>()
+        val files = mutableListOf<android.net.Uri>()
+        pending.add(treeUri)
+        while (pending.isNotEmpty()) {
+            val parent = pending.removeFirst()
+            val parentId = runCatching { DocumentsContract.getDocumentId(parent) }.getOrNull() ?: continue
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parent, parentId)
+            runCatching {
+                resolver.query(
+                    childrenUri,
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                    ),
+                    null, null, null
+                )?.use { cursor ->
+                    val idIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val mimeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getString(idIndex) ?: continue
+                        val name = cursor.getString(nameIndex).orEmpty()
+                        val mime = cursor.getString(mimeIndex).orEmpty()
+                        val child = DocumentsContract.buildDocumentUriUsingTree(parent, id)
+                        if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                            pending.add(child)
+                        } else if (mime.startsWith("audio/") || LocalTrackIdentity.isSupportedAudioName(name)) {
+                            files.add(child)
+                        }
+                    }
+                }
+            }.onFailure { android.util.Log.w("FloWaveRepository", "Could not enumerate SAF directory", it) }
+        }
+        files.distinctBy { it.toString() }.mapNotNull { importAudioUri(it) }
+    }
+
+    private fun persistReadPermission(uri: android.net.Uri) {
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
     }
 
     suspend fun removeUnavailableImportedTracks(): Int = withContext(Dispatchers.IO) {

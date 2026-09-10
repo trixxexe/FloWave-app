@@ -110,6 +110,16 @@ fun MainScreen() {
             }
         }
     }
+    val importFolderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                val imported = repository.importAudioTree(uri)
+                Toast.makeText(context, "Imported ${imported.size} audio file${if (imported.size == 1) "" else "s"} from folder", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // BackHandler: Single tap as redirector to previous page, Double tap on Home to exit app
     BackHandler(enabled = true) {
@@ -426,6 +436,9 @@ fun MainScreen() {
                         },
                         onImportFilesClick = {
                             importAudioLauncher.launch(arrayOf("audio/*"))
+                        },
+                        onImportFolderClick = {
+                            importFolderLauncher.launch(null)
                         },
                         onSearchQueryChange = { query ->
                             if (query.isNotEmpty()) {

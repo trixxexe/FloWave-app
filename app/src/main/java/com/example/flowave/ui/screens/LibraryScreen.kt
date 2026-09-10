@@ -36,6 +36,7 @@ fun LibraryScreen(
     onDownloadOnlineTrack: (InnerTubeTrack) -> Unit,
     onScanStorageClick: () -> Unit,
     onImportFilesClick: () -> Unit = {},
+    onImportFolderClick: () -> Unit = {},
     onSearchQueryChange: (String) -> Unit,
     onEditTagClick: (Track) -> Unit,
     onToggleFavoriteClick: (Track) -> Unit,
@@ -80,6 +81,16 @@ fun LibraryScreen(
                     Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Import", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onImportFolderClick,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.testTag("import_folder_btn")
+                ) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Folder", fontSize = 12.sp)
                 }
                 Button(
                     onClick = onScanStorageClick,

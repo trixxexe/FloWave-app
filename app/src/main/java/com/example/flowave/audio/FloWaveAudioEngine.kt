@@ -231,11 +231,12 @@ class FloWaveAudioEngine(private val context: Context) {
                 }.map(::canonicalTrack)
                 
                 if (tracks.isNotEmpty()) {
+                    val restoredIndex = dbState.currentQueueIndex.coerceIn(0, tracks.lastIndex)
                     withContext(Dispatchers.Main) {
                         _playbackState.value = _playbackState.value.copy(
                             queue = tracks,
-                            currentQueueIndex = dbState.currentQueueIndex,
-                            currentTrack = tracks.getOrNull(dbState.currentQueueIndex),
+                            currentQueueIndex = restoredIndex,
+                            currentTrack = tracks.getOrNull(restoredIndex),
                             currentPositionMs = dbState.currentPositionMs,
                             repeatMode = dbState.repeatMode,
                             isShuffleEnabled = dbState.isShuffleEnabled,
@@ -244,13 +245,14 @@ class FloWaveAudioEngine(private val context: Context) {
                         
                         val mediaItems = tracks.mapNotNull { track -> createMediaItem(track) }
                         exoPlayer?.setMediaItems(mediaItems)
-                        if (dbState.currentQueueIndex in tracks.indices) {
-                            exoPlayer?.seekTo(dbState.currentQueueIndex, dbState.currentPositionMs)
-                        }
+                        exoPlayer?.seekTo(restoredIndex, dbState.currentPositionMs.coerceAtLeast(0L))
                         exoPlayer?.repeatMode = dbState.repeatMode
                         exoPlayer?.shuffleModeEnabled = dbState.isShuffleEnabled
                         exoPlayer?.playWhenReady = dbState.isPlaying
                         exoPlayer?.prepare()
+                    }
+                    if (tracks.size != dbItems.size || restoredIndex != dbState.currentQueueIndex) {
+                        persistQueueAndState()
                     }
                 }
             } catch (e: Exception) {

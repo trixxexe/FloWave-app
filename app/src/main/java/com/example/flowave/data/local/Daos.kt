@@ -55,6 +55,9 @@ interface TrackDao {
     @Query("DELETE FROM tracks WHERE source = 'LOCAL'")
     suspend fun deleteLocalTracks()
 
+    @Query("SELECT * FROM tracks WHERE source = 'LOCAL'")
+    suspend fun getLocalTracks(): List<Track>
+
     @Query("SELECT * FROM tracks WHERE source = 'IMPORTED'")
     suspend fun getImportedTracks(): List<Track>
 }
