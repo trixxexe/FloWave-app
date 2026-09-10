@@ -33,6 +33,12 @@ data class InnerTubeClientConfig(
     val userAgent: String
 )
 
+data class ResolvedStreamSource(
+    val url: String,
+    val resolver: String,
+    val candidateKey: String? = null
+)
+
 object InnerTubeClients {
     val ANDROID_TESTSUITE = InnerTubeClientConfig(
         clientName = "ANDROID_TESTSUITE",
@@ -93,6 +99,7 @@ class InnerTubeRepository(context: Context? = null) {
 
     // Cache stream URLs for 2 hours to avoid re-querying YouTube endpoints
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
+    private val selectedFallbackSources = ConcurrentHashMap<String, ResolverCandidate>()
     private val streamResolutionLocks = ConcurrentHashMap<String, Mutex>()
     val streamDurationCache = ConcurrentHashMap<String, Long>()
     private val fallbackPool = ResolverPool().apply {
@@ -115,7 +122,55 @@ class InnerTubeRepository(context: Context? = null) {
 
     fun invalidateStreamUrl(videoId: String) {
         streamUrlCache.remove(videoId)
+        selectedFallbackSources.remove(videoId)
         logger?.debug("online", "stream_cache_invalidated", context = mapOf("videoId" to videoId))
+    }
+
+    suspend fun getStreamResolution(videoId: String, forceRefresh: Boolean = false): ResolvedStreamSource {
+        val url = getStreamUrl(videoId, forceRefresh)
+        val candidate = selectedFallbackSources[videoId]
+        return ResolvedStreamSource(
+            url = url,
+            resolver = candidate?.type?.name?.lowercase() ?: "inner_tube",
+            candidateKey = candidate?.key
+        )
+    }
+
+    fun markPlayableStream(videoId: String, latencyMs: Long) {
+        val candidate = selectedFallbackSources[videoId] ?: return
+        val now = System.currentTimeMillis()
+        fallbackPool.markSuccess(candidate.key, latencyMs, now)
+        fallbackPersistence?.save(fallbackPool.serialize())
+        fallbackPersistence?.savePreferred(candidate.type, candidate.key)
+        logger?.info("online", "resolver_promoted_after_media_open", context = mapOf(
+            "resolver" to candidate.type.name.lowercase(),
+            "host" to candidate.host,
+            "latencyMs" to latencyMs,
+            "candidateKey" to candidate.key
+        ))
+    }
+
+    fun markUnplayableStream(videoId: String, failureClass: String = "media_open_failure") {
+        val candidate = selectedFallbackSources.remove(videoId) ?: return
+        val now = System.currentTimeMillis()
+        val cooldown = com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass)
+        fallbackPool.markFailure(candidate.key, failureClass, cooldown, now)
+        fallbackPersistence?.save(fallbackPool.serialize())
+        fallbackPersistence?.clearPreferred(candidate.type, candidate.key)
+        logger?.warn("online", "resolver_demoted_after_media_open", context = mapOf(
+            "resolver" to candidate.type.name.lowercase(),
+            "host" to candidate.host,
+            "failureClass" to failureClass,
+            "cooldownMs" to cooldown,
+            "candidateKey" to candidate.key
+        ))
+    }
+
+    private fun preferredCandidates(type: ResolverType, nowMs: Long): List<ResolverCandidate> {
+        val preferredKey = fallbackPersistence?.loadPreferred(type)
+        val preferred = preferredKey?.let { fallbackPool.get(it) }
+            ?.takeIf { it.type == type && it.cooldownUntilMs <= nowMs && it.retiredUntilMs <= nowMs }
+        return listOfNotNull(preferred) + fallbackPool.ranked(type, nowMs).filter { it.key != preferred?.key }
     }
 
     fun parseDurationText(text: String): Long {
@@ -782,7 +837,7 @@ class InnerTubeRepository(context: Context? = null) {
         }
 
         // Piped Public API Fallback Stream Extraction
-        for ((attempt, candidate) in fallbackPool.ranked(ResolverType.PIPED, System.currentTimeMillis()).take(3).withIndex()) {
+        for ((attempt, candidate) in preferredCandidates(ResolverType.PIPED, System.currentTimeMillis()).take(3).withIndex()) {
             val host = candidate.host
             val instance = candidate.endpoint()
             val startedAtNs = System.nanoTime()
@@ -810,8 +865,7 @@ class InnerTubeRepository(context: Context? = null) {
                                     "playableValidation" to false,
                                     "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
                                 ))
-                                fallbackPool.markSuccess(candidate.key, (System.nanoTime() - startedAtNs) / 1_000_000L, System.currentTimeMillis())
-                                fallbackPersistence?.save(fallbackPool.serialize())
+                                selectedFallbackSources[videoId] = candidate
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), selected.url)
                                 return@withContext selected.url
                         }
@@ -840,7 +894,7 @@ class InnerTubeRepository(context: Context? = null) {
         }
 
         // Invidious Direct Fallback Stream Extraction
-        for ((attempt, candidate) in fallbackPool.ranked(ResolverType.INVIDIOUS, System.currentTimeMillis()).take(2).withIndex()) {
+        for ((attempt, candidate) in preferredCandidates(ResolverType.INVIDIOUS, System.currentTimeMillis()).take(2).withIndex()) {
             val host = candidate.host
                 val startedAtNs = System.nanoTime()
                 try {
@@ -869,8 +923,7 @@ class InnerTubeRepository(context: Context? = null) {
                             "playableValidation" to false,
                             "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
                         ))
-                        fallbackPool.markSuccess(candidate.key, (System.nanoTime() - startedAtNs) / 1_000_000L, System.currentTimeMillis())
-                        fallbackPersistence?.save(fallbackPool.serialize())
+                        selectedFallbackSources[videoId] = candidate
                         streamUrlCache[videoId] = Pair(System.currentTimeMillis(), selected.url)
                         return@withContext selected.url
                     }

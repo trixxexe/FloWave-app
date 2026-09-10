@@ -41,6 +41,10 @@ class FloWaveDownloadService : Service() {
             if (activeDownloads.get() == 0) stopSelf(startId)
             return START_NOT_STICKY
         }
+        if (!DownloadInput.isHttpUrl(targetUrl)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         val outputDir = File(
             getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: filesDir,
             "FloWaveDownloads"
@@ -48,8 +52,9 @@ class FloWaveDownloadService : Service() {
         val taskId = "url_${UUID.randomUUID()}"
         val downloadEntry = DownloadEntry(
             id = taskId,
-            trackTitle = targetUrl,
-            artistName = "Online download",
+            trackTitle = intent?.getStringExtra(EXTRA_TITLE)?.ifBlank { null } ?: targetUrl,
+            artistName = intent?.getStringExtra(EXTRA_ARTIST).orEmpty().ifBlank { "Online download" },
+            thumbnailUrl = intent?.getStringExtra(EXTRA_THUMBNAIL),
             downloadUrl = targetUrl,
             status = DownloadStatus.DOWNLOADING
         )
@@ -64,6 +69,9 @@ class FloWaveDownloadService : Service() {
 
         serviceScope.launch {
             try {
+                if (downloadDao.getDownloadByUrl(targetUrl) != null) {
+                    return@launch
+                }
                 downloadDao.insertDownload(downloadEntry)
                 downloadEngine.executeDownload(targetUrl, outputDir).collect { state ->
                     when (state) {
@@ -175,6 +183,9 @@ class FloWaveDownloadService : Service() {
 
     companion object {
         const val EXTRA_URL = "extra_target_url"
+        const val EXTRA_TITLE = "extra_title"
+        const val EXTRA_ARTIST = "extra_artist"
+        const val EXTRA_THUMBNAIL = "extra_thumbnail"
         private const val CHANNEL_ID = "flowave_download_channel"
         private const val NOTIFICATION_ID = 2001
     }

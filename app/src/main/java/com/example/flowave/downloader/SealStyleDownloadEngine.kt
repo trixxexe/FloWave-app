@@ -4,10 +4,12 @@ import android.util.Log
 import com.example.flowave.FloWaveRuntime
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -22,7 +24,29 @@ import java.util.UUID
  */
 class SealStyleDownloadEngine {
 
-    fun executeDownload(url: String, outputDir: File): Flow<DownloadState> = channelFlow {
+    suspend fun inspect(input: String): Result<List<DownloadMediaInfo>> = withContext(Dispatchers.IO) {
+        if (!FloWaveRuntime.awaitReady()) return@withContext Result.failure(
+            IllegalStateException("The embedded yt-dlp runtime is unavailable")
+        )
+        runCatching {
+            val request = YoutubeDLRequest(DownloadInput.sourceFor(input)).apply {
+                addOption("--dump-single-json")
+                addOption("--flat-playlist")
+                addOption("--skip-download")
+                addOption("--no-warnings")
+                addOption("--no-playlist")
+            }
+            val output = YoutubeDL.getInstance().execute(
+                request, "flowave-inspect-${UUID.randomUUID()}", null
+            ).out
+            parseMediaInfo(output)
+        }
+    }
+
+    fun executeDownload(url: String, outputDir: File): Flow<DownloadState> =
+        executeDownload(url, outputDir, DownloadOptions())
+
+    fun executeDownload(url: String, outputDir: File, options: DownloadOptions): Flow<DownloadState> = channelFlow {
         send(DownloadState.Initializing)
         if (!FloWaveRuntime.awaitReady()) {
             send(DownloadState.Error("The embedded yt-dlp runtime is unavailable. Restart FloWave and try again."))
@@ -37,6 +61,7 @@ class SealStyleDownloadEngine {
             return@channelFlow
         }
 
+        send(DownloadState.Preparing)
         val processId = "flowave-${UUID.randomUUID()}"
         val template = File(outputDir, "%(title).200B [%(id)s].%(ext)s").absolutePath
         val request = YoutubeDLRequest(url).apply {
@@ -48,9 +73,19 @@ class SealStyleDownloadEngine {
             addOption("--retries", "3")
             addOption("--fragment-retries", "3")
             addOption("--socket-timeout", "30")
-            addOption("-x")
-            addOption("--audio-format", "m4a")
-            addOption("--audio-quality", "0")
+            if (options.kind == DownloadMediaKind.AUDIO) {
+                addOption("-x")
+                addOption("--audio-format", options.audioFormat)
+                addOption("--audio-quality", options.audioQuality)
+                addOption("--embed-metadata")
+                addOption("--embed-thumbnail")
+            } else {
+                addOption("-f", options.formatSelector ?: "bv*+ba/b")
+                addOption("--merge-output-format", "mp4")
+            }
+            if (options.kind == DownloadMediaKind.AUDIO) {
+                options.formatSelector?.let { addOption("-f", it) }
+            }
             addOption("-o", template)
             // Print the final post-processing path so callers never have to
             // guess whether yt-dlp produced m4a, webm, or another container.
@@ -69,15 +104,40 @@ class SealStyleDownloadEngine {
             }
             val outputPath = findOutputPath(response.out, outputDir)
             if (outputPath == null) {
-                send(DownloadState.Error("yt-dlp completed without producing an audio file."))
+                send(DownloadState.Error("yt-dlp completed without producing a media file."))
             } else {
                 send(DownloadState.Success(outputPath))
             }
         } catch (error: Throwable) {
             Log.e(TAG, "Download failed", error)
-            send(DownloadState.Error(error.message ?: "Download failed."))
+            if (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                send(DownloadState.Error(error.message ?: "Download failed."))
+            } else {
+                send(DownloadState.Cancelled)
+            }
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun parseMediaInfo(stdout: String): List<DownloadMediaInfo> {
+        val root = JSONObject(stdout.trim())
+        val entries = root.optJSONArray("entries")
+        val objects = if (entries != null) {
+            (0 until entries.length()).mapNotNull { entries.optJSONObject(it) }
+        } else listOf(root)
+        return objects.mapNotNull { item ->
+            val webpageUrl = item.optString("webpage_url").ifBlank { item.optString("url") }
+            val title = item.optString("title").trim()
+            if (webpageUrl.isBlank() || title.isBlank()) return@mapNotNull null
+            DownloadMediaInfo(
+                id = item.optString("id").ifBlank { null },
+                webpageUrl = webpageUrl,
+                title = title,
+                creator = item.optString("uploader").ifBlank { item.optString("channel") },
+                thumbnailUrl = item.optString("thumbnail").ifBlank { null },
+                durationSeconds = item.optLong("duration", -1L).takeIf { it >= 0L }
+            )
+        }
+    }
 
     /** Resolves a playable audio URL through the same embedded yt-dlp runtime. */
     suspend fun resolveAudioUrl(url: String): Result<String> = withContext(Dispatchers.IO) {

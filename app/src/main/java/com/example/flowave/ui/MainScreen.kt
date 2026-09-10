@@ -39,6 +39,7 @@ import com.example.flowave.ui.components.TagEditorDialog
 import com.example.flowave.ui.screens.*
 import com.example.flowave.ui.theme.*
 import com.example.flowave.utils.SettingsSchema
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
@@ -87,6 +88,7 @@ fun MainScreen() {
     var searchOnlineResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var downloaderSearchResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var isDownloaderSearching by remember { mutableStateOf(false) }
+    var downloaderSearchJob by remember { mutableStateOf<Job?>(null) }
     var currentLrcLines by remember { mutableStateOf<List<LrcLine>>(emptyList()) }
 
     var showCrashReportDialog by remember { mutableStateOf(false) }
@@ -510,11 +512,22 @@ fun MainScreen() {
                         downloadEntries = downloadEntries,
                         searchResults = downloaderSearchResults,
                         onSearchKeyword = { keyword ->
+                            downloaderSearchJob?.cancel()
                             if (keyword.isNotBlank()) {
-                                coroutineScope.launch {
+                                downloaderSearchJob = coroutineScope.launch {
                                     isDownloaderSearching = true
                                     downloaderSearchResults = try {
-                                        innerTubeRepo.searchTracks(keyword.trim())
+                                        downloader.inspect(keyword.trim()).getOrDefault(emptyList()).map { info ->
+                                            InnerTubeTrack(
+                                                id = info.id ?: info.webpageUrl,
+                                                title = info.title,
+                                                artist = info.creator.ifBlank { "Unknown artist" },
+                                                durationText = info.durationSeconds?.let { seconds ->
+                                                    "%d:%02d".format(seconds / 60L, seconds % 60L)
+                                                } ?: "--:--",
+                                                thumbnailUrl = info.thumbnailUrl.orEmpty()
+                                            )
+                                        }
                                     } catch (e: Exception) {
                                         android.util.Log.e("MainScreen", "Downloader search failed: ${e.message}")
                                         emptyList()
@@ -530,12 +543,23 @@ fun MainScreen() {
                             coroutineScope.launch { downloader.startDownload(track) }
                         },
                         onStartUrlDownload = { url ->
-                            val intent = android.content.Intent(context, FloWaveDownloadService::class.java)
-                            intent.putExtra(FloWaveDownloadService.EXTRA_URL, url)
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                context.startForegroundService(intent)
-                            } else {
-                                context.startService(intent)
+                            coroutineScope.launch {
+                                val info = downloader.inspect(url).getOrNull()?.firstOrNull()
+                                if (info == null) {
+                                    Toast.makeText(context, "Unable to inspect this URL", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val intent = android.content.Intent(context, FloWaveDownloadService::class.java).apply {
+                                        putExtra(FloWaveDownloadService.EXTRA_URL, info.webpageUrl)
+                                        putExtra(FloWaveDownloadService.EXTRA_TITLE, info.title)
+                                        putExtra(FloWaveDownloadService.EXTRA_ARTIST, info.creator)
+                                        putExtra(FloWaveDownloadService.EXTRA_THUMBNAIL, info.thumbnailUrl)
+                                    }
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                        context.startForegroundService(intent)
+                                    } else {
+                                        context.startService(intent)
+                                    }
+                                }
                             }
                         },
                         onBackClick = { selectedTab = 0 }

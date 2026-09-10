@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +45,13 @@ fun DownloaderScreen(
     var keywordQuery by remember { mutableStateOf("") }
     var urlInput by remember { mutableStateOf("") }
     var searchMode by remember { mutableIntStateOf(0) } // 0: Keyword Search, 1: Direct Link
+
+    LaunchedEffect(keywordQuery, searchMode) {
+        if (searchMode == 0 && keywordQuery.trim().length >= 2) {
+            delay(350)
+            onSearchKeyword(keywordQuery.trim())
+        }
+    }
 
     Column(
         modifier = modifier
@@ -130,9 +138,6 @@ fun DownloaderScreen(
                             value = keywordQuery,
                             onValueChange = {
                                 keywordQuery = it
-                                if (it.length >= 2) {
-                                    onSearchKeyword(it)
-                                }
                             },
                             placeholder = { Text("e.g. Arz Kiya Hai, Arijit Singh", color = TextMuted) },
                             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = CyanNeon) },

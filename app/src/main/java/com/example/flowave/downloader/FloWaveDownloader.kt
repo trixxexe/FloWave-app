@@ -28,6 +28,85 @@ class FloWaveDownloader(
 
     val allDownloadEntries: Flow<List<DownloadEntry>> = downloadDao.getAllDownloads()
 
+    suspend fun inspect(input: String): Result<List<DownloadMediaInfo>> = sealEngine.inspect(input)
+
+    suspend fun isAlreadyQueued(url: String): Boolean = withContext(Dispatchers.IO) {
+        downloadDao.getDownloadByUrl(url) != null
+    }
+
+    suspend fun download(
+        info: DownloadMediaInfo,
+        options: DownloadOptions = DownloadOptions()
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (downloadDao.getDownloadByUrl(info.webpageUrl) != null) {
+            return@withContext Result.failure(IllegalStateException("This media is already queued or downloaded"))
+        }
+        val id = info.id?.takeIf { it.isNotBlank() } ?: "url_${info.webpageUrl.hashCode()}"
+        val entry = DownloadEntry(
+            id = id,
+            trackTitle = info.title,
+            artistName = info.creator.ifBlank { "Downloaded" },
+            thumbnailUrl = info.thumbnailUrl,
+            downloadUrl = info.webpageUrl,
+            status = DownloadStatus.DOWNLOADING
+        )
+        downloadDao.insertDownload(entry)
+        try {
+            val outputDir = File(
+                context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: context.filesDir,
+                "FloWaveDownloads"
+            )
+            sealEngine.executeDownload(info.webpageUrl, outputDir, options).collect { state ->
+                when (state) {
+                    is DownloadState.Downloading -> downloadDao.updateProgress(
+                        id, (state.progress / 100f).coerceIn(0f, 1f), 0L, DownloadStatus.DOWNLOADING
+                    )
+                    is DownloadState.Success -> {
+                        val file = File(state.outputFilePath)
+                        if (!file.isFile || file.length() == 0L) error("Downloaded file is empty")
+                        downloadDao.markCompleted(id, file.absolutePath, DownloadStatus.DONE, System.currentTimeMillis())
+                        importCompletedFile(info, id, file)
+                    }
+                    is DownloadState.Error -> error(state.message)
+                    is DownloadState.Cancelled -> error("Download cancelled")
+                    else -> Unit
+                }
+            }
+        } catch (error: Throwable) {
+            downloadDao.markFailed(id, error.message ?: "Download failed", DownloadStatus.FAILED)
+            return@withContext Result.failure(error)
+        }
+        Result.success(Unit)
+    }
+
+    private suspend fun importCompletedFile(info: DownloadMediaInfo, id: String, file: File) {
+        val retriever = android.media.MediaMetadataRetriever()
+        val durationMs = try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+        } catch (error: Exception) {
+            logger.warn("download", "metadata_failed", context = mapOf("operation" to "completed_import"), throwable = error)
+            0L
+        } finally {
+            runCatching { retriever.release() }
+        }
+        repository.insertTrack(
+            Track(
+                id = "dl_$id",
+                title = info.title,
+                artist = info.creator.ifBlank { "Downloaded" },
+                album = "Downloaded",
+                durationMs = durationMs,
+                mediaUri = file.absolutePath,
+                artworkUri = info.thumbnailUrl,
+                isOnline = false,
+                source = "DOWNLOADED",
+                folderPath = file.parent
+            )
+        )
+    }
+
     suspend fun startDownload(track: InnerTubeTrack) = downloadAudioTrack(track, "")
 
     /**
@@ -42,6 +121,10 @@ class FloWaveDownloader(
             track.id
         } else {
             "https://www.youtube.com/watch?v=${track.id}"
+        }
+        if (downloadDao.getDownloadByUrl(sourceUrl) != null) {
+            logger.debug("download", "duplicate_ignored", context = mapOf("videoId" to track.id))
+            return@withContext
         }
         downloadDao.insertDownload(
             DownloadEntry(

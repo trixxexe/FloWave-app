@@ -41,10 +41,10 @@ class FloWaveDataSourceFactory(
                     val videoId = dataSpec.uri.lastPathSegment
                         ?.takeIf { it.isNotBlank() }
                         ?: throw java.io.IOException("Missing online track identifier")
-                    val resolvedUrl = try {
+                    val resolution = try {
                         runBlocking(Dispatchers.IO) {
                             withTimeout(45_000L) {
-                                streamRepository.getStreamUrl(videoId)
+                                streamRepository.getStreamResolution(videoId)
                             }
                         }
                     } catch (cancelled: InterruptedException) {
@@ -64,15 +64,30 @@ class FloWaveDataSourceFactory(
                         logger.error("online", "data_source_resolution_failed", context = mapOf("videoId" to videoId), throwable = error)
                         throw error
                     }
-                    if (resolvedUrl.isBlank() || !resolvedUrl.startsWith("http")) {
+                    if (resolution.url.isBlank() || !resolution.url.startsWith("http")) {
                         throw java.io.IOException("Online stream resolver returned an invalid URL")
                     }
                     activeDataSource = cacheDataSource
                     val resolvedSpec = dataSpec.buildUpon()
-                        .setUri(Uri.parse(resolvedUrl))
+                        .setUri(Uri.parse(resolution.url))
                         .setKey(videoId)
                         .build()
-                    val openedLength = activeDataSource?.open(resolvedSpec) ?: -1L
+                    val openStartedAt = System.nanoTime()
+                    val openedLength = try {
+                        activeDataSource?.open(resolvedSpec) ?: -1L
+                    } catch (error: Exception) {
+                        val cancelled = error is InterruptedException || error is kotlinx.coroutines.CancellationException
+                        if (resolution.candidateKey != null && !cancelled) {
+                            streamRepository.markUnplayableStream(videoId, "media_open_failure")
+                        }
+                        if (cancelled) {
+                            logger.debug("online", "stream_open_cancelled", context = mapOf(
+                                "videoId" to videoId,
+                                "reason" to error::class.simpleName.orEmpty()
+                            ))
+                        }
+                        throw error
+                    }
                     val headers = activeDataSource?.responseHeaders.orEmpty()
                     val contentType = headers.entries
                         .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
@@ -99,6 +114,7 @@ class FloWaveDataSourceFactory(
                     if (!com.example.flowave.data.remote.ResolverStreamSelector.isPlayableResponseContentType(contentType)) {
                         activeDataSource?.close()
                         activeDataSource = null
+                        streamRepository.markUnplayableStream(videoId, "media_open_failure")
                         streamRepository.invalidateStreamUrl(videoId)
                         FloWaveCacheManager.invalidate(videoId)
                         logger.error("online", "stream_open_rejected", context = mapOf(
@@ -113,6 +129,12 @@ class FloWaveDataSourceFactory(
                         "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
                         "openedLength" to openedLength
                     ))
+                    if (resolution.candidateKey != null) {
+                        streamRepository.markPlayableStream(
+                            videoId,
+                            (System.nanoTime() - openStartedAt) / 1_000_000L
+                        )
+                    }
                     return openedLength
                 }
                 activeDataSource = if (scheme == "http" || scheme == "https") cacheDataSource else defaultDataSource

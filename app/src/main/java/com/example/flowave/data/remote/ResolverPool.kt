@@ -193,6 +193,20 @@ class ResolverPoolPersistence(context: Context) {
     fun save(serialized: String) {
         preferences.edit().putString("pool", serialized).apply()
     }
+
+    fun loadPreferred(type: ResolverType): String? =
+        preferences.getString("preferred_${type.name.lowercase()}", null)
+
+    fun savePreferred(type: ResolverType, key: String) {
+        preferences.edit().putString("preferred_${type.name.lowercase()}", key).apply()
+    }
+
+    fun clearPreferred(type: ResolverType, key: String? = null) {
+        val current = loadPreferred(type)
+        if (key == null || current == key) {
+            preferences.edit().remove("preferred_${type.name.lowercase()}").apply()
+        }
+    }
 }
 
 object InvidiousRegistryParser {

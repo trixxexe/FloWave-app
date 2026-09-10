@@ -108,6 +108,9 @@ interface DownloadDao {
     @Query("SELECT * FROM download_entries WHERE id = :id LIMIT 1")
     suspend fun getDownloadById(id: String): DownloadEntry?
 
+    @Query("SELECT * FROM download_entries WHERE downloadUrl = :url ORDER BY createdAt DESC LIMIT 1")
+    suspend fun getDownloadByUrl(url: String): DownloadEntry?
+
     @Query("SELECT * FROM download_entries WHERE status = :status ORDER BY createdAt ASC")
     fun getDownloadsByStatus(status: DownloadStatus): Flow<List<DownloadEntry>>
 
