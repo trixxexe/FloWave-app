@@ -267,7 +267,7 @@ class FloWaveRepository(private val context: Context) {
             "count" to localList.size,
             "queryCompleted" to queryCompleted
         ))
-        localList
+        return localList
     }
 
     /** Imports an audio document without copying it; the persisted SAF URI is the playback source. */
