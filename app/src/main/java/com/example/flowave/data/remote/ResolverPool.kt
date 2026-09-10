@@ -165,13 +165,11 @@ object InvidiousRegistryParser {
             val metadata = item.optJSONObject(1) ?: continue
             val uri = metadata.optString("uri")
             val monitor = metadata.optJSONObject("monitor") ?: continue
-            val ssl = monitor.optJSONObject("ssl") ?: continue
+            // Registry health fields are advisory and change shape over time;
+            // transport/API validation below is the admission gate.
             if (metadata.optString("type") != "https" ||
                 !monitor.optBoolean("published", false) ||
-                monitor.optBoolean("down", true) ||
-                monitor.optInt("last_status", 0) !in 200..299 ||
-                monitor.optDouble("uptime", 0.0) < 90.0 ||
-                !ssl.optBoolean("valid", false)
+                monitor.optBoolean("down", true)
             ) continue
             val normalized = ResolverPool.normalizeHost(uri) ?: ResolverPool.normalizeHost(host) ?: continue
             result += ResolverCandidate(ResolverType.INVIDIOUS, normalized, source)
