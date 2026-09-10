@@ -4,6 +4,7 @@ import com.example.flowave.data.remote.InvidiousRegistryParser
 import com.example.flowave.data.remote.ResolverCandidate
 import com.example.flowave.data.remote.ResolverPool
 import com.example.flowave.data.remote.ResolverType
+import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -60,6 +61,18 @@ class ResolverPoolTest {
               ["plain.example", {"type":"http","uri":"http://plain.example","monitor":{"published":true,"down":false,"last_status":200,"uptime":99.0,"ssl":{"valid":true}}}]
             ]
         """.trimIndent()
+        val root = JSONArray(json)
+        assertEquals(4, root.length())
+        val firstTuple = root.optJSONArray(0)
+        assertTrue(firstTuple != null)
+        val firstMetadata = firstTuple!!.optJSONObject(1)
+        assertTrue(firstMetadata != null)
+        assertEquals("https", firstMetadata!!.optString("type"))
+        val firstMonitor = firstMetadata.optJSONObject("monitor")
+        assertTrue(firstMonitor != null)
+        assertEquals(200, firstMonitor!!.optInt("last_status", 0))
+        assertEquals(99.0, firstMonitor.optDouble("uptime", 0.0), 0.0)
+        assertEquals("good.example", ResolverPool.normalizeHost(firstMetadata.optString("uri")))
         val candidates = InvidiousRegistryParser.parse(json)
         assertEquals(listOf("good.example"), candidates.map { it.host })
     }
