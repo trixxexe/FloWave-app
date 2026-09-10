@@ -586,7 +586,7 @@ class InnerTubeRepository(context: Context? = null) {
                     .header("User-Agent", clientConfig.userAgent)
                     .build()
 
-                    executeWithRetry(request, maxRetries = 1).use { response ->
+                executeWithRetry(request, maxRetries = 1).use { response ->
                     val bodyString = response.body?.string() ?: ""
                     if (response.isSuccessful && bodyString.isNotEmpty()) {
                         val json = JSONObject(bodyString)
