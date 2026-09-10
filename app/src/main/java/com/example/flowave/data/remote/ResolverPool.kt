@@ -156,6 +156,18 @@ class ResolverPoolPersistence(context: Context) {
 }
 
 object InvidiousRegistryParser {
+    private fun booleanField(objectValue: org.json.JSONObject, name: String, default: Boolean): Boolean {
+        val value = objectValue.opt(name) ?: return default
+        return when (value) {
+            is Boolean -> value
+            else -> when (value.toString().lowercase()) {
+                "true" -> true
+                "false" -> false
+                else -> default
+            }
+        }
+    }
+
     fun parse(json: String, source: String = "invidious_registry"): List<ResolverCandidate> {
         val result = mutableListOf<ResolverCandidate>()
         val array = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
@@ -168,7 +180,7 @@ object InvidiousRegistryParser {
             // Registry health fields are advisory and change shape over time;
             // transport/API validation below is the admission gate.
             if (!metadata.optString("type").equals("https", ignoreCase = true) ||
-                monitor.optBoolean("down", true)
+                booleanField(monitor, "down", true)
             ) continue
             val normalized = ResolverPool.normalizeHost(uri) ?: ResolverPool.normalizeHost(host) ?: continue
             result += ResolverCandidate(ResolverType.INVIDIOUS, normalized, source)
