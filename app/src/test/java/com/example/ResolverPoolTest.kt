@@ -44,6 +44,32 @@ class ResolverPoolTest {
     }
 
     @Test
+    fun `repeated host failures retire candidate and validation success recovers it`() {
+        val pool = ResolverPool()
+        pool.upsert(ResolverCandidate(ResolverType.INVIDIOUS, "dead.example", "discovered"))
+        repeat(3) { attempt ->
+            pool.markFailure("INVIDIOUS|dead.example", "dns_unavailable", 0, attempt.toLong())
+        }
+        assertTrue(pool.ranked(ResolverType.INVIDIOUS, 3).isEmpty())
+        assertTrue(pool.get("INVIDIOUS|dead.example")!!.retiredUntilMs > 3)
+
+        pool.markValidated("INVIDIOUS|dead.example", 120, 1000)
+        pool.markSuccess("INVIDIOUS|dead.example", 120, 1000)
+        assertEquals("dead.example", pool.ranked(ResolverType.INVIDIOUS, 1000).single().host)
+        assertEquals(0, pool.get("INVIDIOUS|dead.example")!!.consecutiveFailures)
+    }
+
+    @Test
+    fun `stale candidates remain ranked but are ordered after recently validated candidates`() {
+        val pool = ResolverPool()
+        pool.upsert(ResolverCandidate(ResolverType.INVIDIOUS, "stale.example", "persisted", validationMs = 1))
+        pool.upsert(ResolverCandidate(ResolverType.INVIDIOUS, "fresh.example", "discovered", validationMs = 99))
+        val ranked = pool.ranked(ResolverType.INVIDIOUS, 100, staleAfterMs = 50)
+        assertEquals(listOf("fresh.example", "stale.example"), ranked.map { it.host })
+        assertTrue(pool.isStale(pool.get("INVIDIOUS|stale.example")!!, 100, 50))
+    }
+
+    @Test
     fun `pool serialization preserves health state`() {
         val pool = ResolverPool()
         pool.upsert(ResolverCandidate(ResolverType.INVIDIOUS, "example.com", "curated"))
@@ -80,5 +106,18 @@ class ResolverPoolTest {
         assertEquals("good.example", ResolverPool.normalizeHost(firstMetadata.optString("uri")))
         val candidates = InvidiousRegistryParser.parse(json)
         assertEquals(listOf("good.example"), candidates.map { it.host })
+    }
+
+    @Test
+    fun `registry parser rejects unsafe URI even when tuple key looks valid`() {
+        val json = "[[\"safe.example\",{\"type\":\"https\",\"uri\":\"http://safe.example\",\"monitor\":{\"last_status\":200,\"uptime\":99.0}}]]"
+        assertTrue(InvidiousRegistryParser.parse(json).isEmpty())
+    }
+
+    @Test
+    fun `stats admission requires an Invidious API payload`() {
+        assertTrue(InvidiousRegistryParser.isValidStatsPayload("{\"software\":{\"name\":\"invidious\"}}"))
+        assertFalse(InvidiousRegistryParser.isValidStatsPayload("<html>not an API</html>"))
+        assertFalse(InvidiousRegistryParser.isValidStatsPayload("{\"software\":{\"name\":\"other\"}}"))
     }
 }

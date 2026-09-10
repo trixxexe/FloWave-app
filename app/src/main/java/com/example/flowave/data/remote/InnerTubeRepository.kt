@@ -97,6 +97,7 @@ class InnerTubeRepository(context: Context? = null) {
     val streamDurationCache = ConcurrentHashMap<String, Long>()
     private val fallbackPool = ResolverPool().apply {
         seed(ResolverType.PIPED, FloWaveConstants.PIPED_STREAM_INSTANCES, "curated", System.currentTimeMillis())
+        seed(ResolverType.PIPED, FloWaveConstants.PIPED_SEARCH_INSTANCES, "curated", System.currentTimeMillis())
         seed(ResolverType.INVIDIOUS, FloWaveConstants.INVIDIOUS_SEARCH_INSTANCES, "curated", System.currentTimeMillis())
     }
     private val fallbackPersistence = appContext?.let { ResolverPoolPersistence(it) }
@@ -219,7 +220,8 @@ class InnerTubeRepository(context: Context? = null) {
         status: Int? = null,
         error: Throwable? = null,
         failureClassOverride: String? = null,
-        penalizeHost: Boolean = true
+        penalizeHost: Boolean = true,
+        retryAfterHeader: String? = null
     ) {
         val failureClass = failureClassOverride
             ?: status?.let { com.example.flowave.audio.OnlinePlaybackPolicy.classifyHttpStatus(it) }
@@ -227,12 +229,17 @@ class InnerTubeRepository(context: Context? = null) {
             ?: "resolver_error"
         if (failureClass == "cancelled") return
         val now = System.currentTimeMillis()
-        val cooldownMs = com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass)
-        val retryAfterMs = now + cooldownMs
-        if (penalizeHost && cooldownMs > 0L) {
-            fallbackPool.markFailure(candidate.key, failureClass, cooldownMs, now)
+        val policyCooldownMs = com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass)
+        val retryAfterMs = retryAfterHeader?.toLongOrNull()
+            ?.coerceIn(1L, 3600L)
+            ?.times(1000L)
+            ?.coerceAtLeast(policyCooldownMs)
+            ?: policyCooldownMs
+        if (penalizeHost && policyCooldownMs > 0L) {
+            fallbackPool.markFailure(candidate.key, failureClass, retryAfterMs, now)
             fallbackPersistence?.save(fallbackPool.serialize())
         }
+        val updated = fallbackPool.get(candidate.key)
         logger?.warn("online", "resolver_attempt_failed", context = mapOf(
             "videoId" to videoId,
             "resolver" to resolver,
@@ -241,7 +248,10 @@ class InnerTubeRepository(context: Context? = null) {
             "failureClass" to failureClass,
             "httpStatus" to status,
             "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L),
-            "retryAfterMs" to retryAfterMs
+            "retryAfterMs" to retryAfterMs,
+            "consecutiveFailures" to (updated?.consecutiveFailures ?: candidate.consecutiveFailures),
+            "retiredUntilMs" to (updated?.retiredUntilMs ?: candidate.retiredUntilMs),
+            "retired" to ((updated?.retiredUntilMs ?: 0L) > now)
         ), throwable = error)
     }
 
@@ -295,6 +305,8 @@ class InnerTubeRepository(context: Context? = null) {
                 "source" to "invidious_registry",
                 "candidateCount" to discovered.size,
                 "validatedCount" to validated,
+                "poolSize" to fallbackPool.all().size,
+                "healthyInvidious" to fallbackPool.ranked(ResolverType.INVIDIOUS, System.currentTimeMillis()).size,
                 "durationMs" to ((System.nanoTime() - startedAt) / 1_000_000L)
             ))
             validated > 0
@@ -394,10 +406,10 @@ class InnerTubeRepository(context: Context? = null) {
         if (tracks.isNotEmpty()) return@withContext tracks
 
         // ENGINE 2: Public Piped Search API Instances
-        for (instance in FloWaveConstants.PIPED_SEARCH_INSTANCES) {
+        for (candidate in fallbackPool.ranked(ResolverType.PIPED, System.currentTimeMillis()).take(3)) {
             try {
                 val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
-                val requestUrl = if (instance.contains("?")) "${instance}q=$encodedQuery&filter=music_songs" else "$instance$encodedQuery&filter=music_songs"
+                val requestUrl = "https://${candidate.host}/search?q=$encodedQuery&filter=music_songs"
                 val request = Request.Builder()
                     .url(requestUrl)
                     .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
@@ -431,20 +443,26 @@ class InnerTubeRepository(context: Context? = null) {
                             }
                         }
                     }
+                    fallbackPool.markSuccess(candidate.key, 0L, System.currentTimeMillis())
                 }
                 response.close()
             } catch (e: Exception) {
+                val failureClass = com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(e)
+                if (failureClass != "cancelled") {
+                    fallbackPool.markFailure(candidate.key, failureClass, com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass), System.currentTimeMillis())
+                    fallbackPersistence?.save(fallbackPool.serialize())
+                }
                 android.util.Log.w("InnerTubeRepository", "Piped search instance failed: ${e.message}", e)
             }
             if (tracks.isNotEmpty()) return@withContext tracks
         }
 
         // ENGINE 3: Public Invidious Search API Instances
-        for (instance in FloWaveConstants.INVIDIOUS_SEARCH_INSTANCES) {
+        for (candidate in fallbackPool.ranked(ResolverType.INVIDIOUS, System.currentTimeMillis()).take(3)) {
             try {
                 val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
                 val request = Request.Builder()
-                    .url("$instance$encodedQuery&type=video")
+                    .url("https://${candidate.host}/api/v1/search?q=$encodedQuery&type=video")
                     .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
                     .build()
                 val response = executeWithRetry(request)
@@ -471,9 +489,15 @@ class InnerTubeRepository(context: Context? = null) {
                             )
                         }
                     }
+                    fallbackPool.markSuccess(candidate.key, 0L, System.currentTimeMillis())
                 }
                 response.close()
             } catch (e: Exception) {
+                val failureClass = com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(e)
+                if (failureClass != "cancelled") {
+                    fallbackPool.markFailure(candidate.key, failureClass, com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass), System.currentTimeMillis())
+                    fallbackPersistence?.save(fallbackPool.serialize())
+                }
                 android.util.Log.w("InnerTubeRepository", "Invidious search instance failed: ${e.message}", e)
             }
             if (tracks.isNotEmpty()) return@withContext tracks
@@ -793,8 +817,9 @@ class InnerTubeRepository(context: Context? = null) {
                         startedAtNs = startedAtNs,
                         status = response.code.takeIf { !response.isSuccessful },
                         error = IOException("Piped response contained no usable audio stream"),
-                        failureClassOverride = "extraction_failure",
-                        penalizeHost = false
+                        failureClassOverride = if (response.isSuccessful) "extraction_failure" else null,
+                        penalizeHost = response.isSuccessful.not(),
+                        retryAfterHeader = response.header("Retry-After")
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -844,7 +869,8 @@ class InnerTubeRepository(context: Context? = null) {
                         attempt = attempt + 1,
                         startedAtNs = startedAtNs,
                         status = response.code,
-                        error = IOException("Invidious response did not provide a stream")
+                        error = IOException("Invidious response did not provide a stream"),
+                        retryAfterHeader = response.header("Retry-After")
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

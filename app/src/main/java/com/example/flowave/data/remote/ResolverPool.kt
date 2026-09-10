@@ -21,7 +21,8 @@ data class ResolverCandidate(
     val failureClass: String? = null,
     val cooldownUntilMs: Long = 0L,
     val recentLatencyMs: Long = Long.MAX_VALUE,
-    val validationMs: Long = 0L
+    val validationMs: Long = 0L,
+    val retiredUntilMs: Long = 0L
 ) {
     val key: String get() = "${type.name}|$host"
 
@@ -33,6 +34,22 @@ data class ResolverCandidate(
 
 /** Thread-safe, persistence-friendly health registry for third-party resolvers. */
 class ResolverPool {
+    companion object {
+        const val DEFAULT_STALE_AFTER_MS = 24 * 60 * 60 * 1000L
+        const val RETIRE_AFTER_FAILURES = 3
+        const val RETIREMENT_MS = 6 * 60 * 60 * 1000L
+        const val MAX_PERSISTED_CANDIDATES = 64
+
+        fun normalizeHost(value: String): String? {
+            val raw = value.trim().removeSuffix("/")
+            val canonicalRaw = raw.lowercase()
+            val uri = runCatching { URI(if (canonicalRaw.contains("://")) canonicalRaw else "https://$canonicalRaw") }.getOrNull()
+            val host = uri?.host?.lowercase()?.removeSuffix(".") ?: return null
+            if (!uri.scheme.equals("https", ignoreCase = true) || uri.userInfo != null || host.isBlank() || host.contains("@")) return null
+            return host
+        }
+    }
+
     private val candidates = LinkedHashMap<String, ResolverCandidate>()
 
     @Synchronized
@@ -40,13 +57,15 @@ class ResolverPool {
         val normalized = candidate.copy(host = normalizeHost(candidate.host) ?: return)
         val old = candidates[normalized.key]
         candidates[normalized.key] = if (old == null) normalized else normalized.copy(
+            source = if (normalized.source == "curated" && old.source != "curated") old.source else normalized.source,
             lastSuccessMs = maxOf(old.lastSuccessMs, normalized.lastSuccessMs),
             lastFailureMs = maxOf(old.lastFailureMs, normalized.lastFailureMs),
             consecutiveFailures = maxOf(old.consecutiveFailures, normalized.consecutiveFailures),
             failureClass = normalized.failureClass ?: old.failureClass,
             cooldownUntilMs = maxOf(old.cooldownUntilMs, normalized.cooldownUntilMs),
             recentLatencyMs = minOf(old.recentLatencyMs, normalized.recentLatencyMs),
-            validationMs = maxOf(old.validationMs, normalized.validationMs)
+            validationMs = maxOf(old.validationMs, normalized.validationMs),
+            retiredUntilMs = maxOf(old.retiredUntilMs, normalized.retiredUntilMs)
         )
     }
 
@@ -60,17 +79,29 @@ class ResolverPool {
     }
 
     @Synchronized
-    fun ranked(type: ResolverType, nowMs: Long): List<ResolverCandidate> = candidates.values
-        .filter { it.type == type && it.cooldownUntilMs <= nowMs }
+    fun ranked(type: ResolverType, nowMs: Long, staleAfterMs: Long = DEFAULT_STALE_AFTER_MS): List<ResolverCandidate> = candidates.values
+        .filter { it.type == type && it.cooldownUntilMs <= nowMs && it.retiredUntilMs <= nowMs }
         .sortedWith(
-            compareByDescending<ResolverCandidate> { it.lastSuccessMs > 0L }
+            compareByDescending<ResolverCandidate> { it.lastSuccessMs > 0L && !isStale(it, nowMs, staleAfterMs) }
+                .thenByDescending { it.lastSuccessMs > 0L }
                 .thenBy { it.consecutiveFailures }
                 .thenBy { it.recentLatencyMs }
                 .thenByDescending { it.validationMs }
         )
 
     @Synchronized
+    fun candidatesNeedingValidation(type: ResolverType, nowMs: Long, staleAfterMs: Long = DEFAULT_STALE_AFTER_MS): List<ResolverCandidate> =
+        candidates.values.filter { it.type == type && (isStale(it, nowMs, staleAfterMs) || it.retiredUntilMs <= nowMs && it.validationMs == 0L) }
+
+    @Synchronized
+    fun isStale(candidate: ResolverCandidate, nowMs: Long, staleAfterMs: Long = DEFAULT_STALE_AFTER_MS): Boolean =
+        candidate.validationMs == 0L || nowMs - candidate.validationMs >= staleAfterMs
+
+    @Synchronized
     fun all(): List<ResolverCandidate> = candidates.values.toList()
+
+    @Synchronized
+    fun get(key: String): ResolverCandidate? = candidates[key]
 
     @Synchronized
     fun markSuccess(key: String, latencyMs: Long, nowMs: Long) {
@@ -80,23 +111,41 @@ class ResolverPool {
             consecutiveFailures = 0,
             failureClass = null,
             cooldownUntilMs = 0L,
-            recentLatencyMs = latencyMs.coerceAtLeast(0L)
+            recentLatencyMs = latencyMs.coerceAtLeast(0L),
+            retiredUntilMs = 0L,
+            validationMs = maxOf(candidate.validationMs, nowMs)
+        )
+    }
+
+    @Synchronized
+    fun markValidated(key: String, latencyMs: Long, nowMs: Long) {
+        val candidate = candidates[key] ?: return
+        candidates[key] = candidate.copy(
+            validationMs = nowMs,
+            recentLatencyMs = latencyMs.coerceAtLeast(0L),
+            retiredUntilMs = 0L
         )
     }
 
     @Synchronized
     fun markFailure(key: String, failureClass: String, cooldownMs: Long, nowMs: Long) {
         val candidate = candidates[key] ?: return
+        val failures = candidate.consecutiveFailures + 1
+        val shouldRetire = failureClass != "extraction_failure" && failures >= RETIRE_AFTER_FAILURES
         candidates[key] = candidate.copy(
             lastFailureMs = nowMs,
-            consecutiveFailures = candidate.consecutiveFailures + 1,
-            failureClass = failureClass,
-            cooldownUntilMs = nowMs + cooldownMs
+            consecutiveFailures = failures,
+            failureClass = failureClass.take(64),
+            cooldownUntilMs = nowMs + cooldownMs,
+            retiredUntilMs = if (shouldRetire) nowMs + RETIREMENT_MS else candidate.retiredUntilMs
         )
     }
 
     @Synchronized
-    fun serialize(): String = candidates.values.joinToString("\n") { candidate ->
+    fun serialize(): String = candidates.values
+        .sortedWith(compareByDescending<ResolverCandidate> { it.lastSuccessMs }.thenByDescending { it.validationMs })
+        .take(MAX_PERSISTED_CANDIDATES)
+        .joinToString("\n") { candidate ->
         listOf(
             candidate.type.name,
             candidate.host,
@@ -107,7 +156,8 @@ class ResolverPool {
             candidate.failureClass.orEmpty(),
             candidate.cooldownUntilMs,
             candidate.recentLatencyMs,
-            candidate.validationMs
+            candidate.validationMs,
+            candidate.retiredUntilMs
         ).joinToString("|") { it.toString().replace("|", "") }
     }
 
@@ -115,7 +165,7 @@ class ResolverPool {
     fun restore(serialized: String) {
         serialized.lineSequence().forEach { line ->
             val fields = line.split("|")
-            if (fields.size != 10) return@forEach
+            if (fields.size !in 10..11) return@forEach
             runCatching {
                 upsert(ResolverCandidate(
                     type = ResolverType.valueOf(fields[0]),
@@ -127,20 +177,10 @@ class ResolverPool {
                     failureClass = fields[6].ifBlank { null },
                     cooldownUntilMs = fields[7].toLong(),
                     recentLatencyMs = fields[8].toLong(),
-                    validationMs = fields[9].toLong()
+                    validationMs = fields[9].toLong(),
+                    retiredUntilMs = fields.getOrNull(10)?.toLong() ?: 0L
                 ))
             }
-        }
-    }
-
-    companion object {
-        fun normalizeHost(value: String): String? {
-            val raw = value.trim().removeSuffix("/")
-            val canonicalRaw = raw.lowercase()
-            val uri = runCatching { URI(if (canonicalRaw.contains("://")) canonicalRaw else "https://$canonicalRaw") }.getOrNull()
-            val host = uri?.host?.lowercase()?.removeSuffix(".") ?: return null
-            if (!uri.scheme.equals("https", ignoreCase = true) || uri.userInfo != null || host.isBlank() || host.contains("@")) return null
-            return host
         }
     }
 }
@@ -156,6 +196,12 @@ class ResolverPoolPersistence(context: Context) {
 }
 
 object InvidiousRegistryParser {
+    fun isValidStatsPayload(body: String): Boolean {
+        val stats = runCatching { org.json.JSONObject(body) }.getOrNull() ?: return false
+        val software = stats.optJSONObject("software") ?: return false
+        return software.optString("name").equals("invidious", ignoreCase = true)
+    }
+
     fun parse(json: String, source: String = "invidious_registry"): List<ResolverCandidate> {
         val result = mutableListOf<ResolverCandidate>()
         val array = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
@@ -168,10 +214,19 @@ object InvidiousRegistryParser {
             // Registry health fields are advisory and change shape over time;
             // transport/API validation below is the admission gate.
             if (!metadata.optString("type").equals("https", ignoreCase = true) ||
+                monitor.opt("down") == true ||
+                monitor.optString("down").equals("true", ignoreCase = true) ||
                 monitor.optInt("last_status", 0) !in 200..299 ||
                 monitor.optDouble("uptime", 0.0) < 90.0
             ) continue
-            val normalized = ResolverPool.normalizeHost(uri) ?: ResolverPool.normalizeHost(host) ?: continue
+            // A present URI is authoritative. Never turn a malformed or HTTP
+            // URI into an apparently safe candidate by falling back to the
+            // tuple key; only use the key when a registry omits URI metadata.
+            val normalized = if (uri.isNotBlank()) {
+                ResolverPool.normalizeHost(uri)
+            } else {
+                ResolverPool.normalizeHost(host)
+            } ?: continue
             result += ResolverCandidate(ResolverType.INVIDIOUS, normalized, source)
         }
         return result.distinctBy { it.key }
@@ -207,11 +262,10 @@ class InvidiousInstanceDiscovery(private val baseClient: OkHttpClient) {
             .header("User-Agent", "FloWave/2.0 (Android)")
             .build()
         discoveryClient.newCall(request).execute().use { response ->
-            if (response.isSuccessful || response.code in 300..399) {
-                (System.nanoTime() - startedAt) / 1_000_000L
-            } else {
-                null
-            }
+            if (!response.isSuccessful) return@withContext null
+            val body = response.body?.string().orEmpty()
+            if (!InvidiousRegistryParser.isValidStatsPayload(body)) return@withContext null
+            (System.nanoTime() - startedAt) / 1_000_000L
         }
     }
 }
