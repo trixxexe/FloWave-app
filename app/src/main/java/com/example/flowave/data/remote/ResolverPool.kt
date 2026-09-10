@@ -136,9 +136,10 @@ class ResolverPool {
     companion object {
         fun normalizeHost(value: String): String? {
             val raw = value.trim().removeSuffix("/")
-            val uri = runCatching { URI(if (raw.contains("://")) raw else "https://$raw") }.getOrNull()
+            val canonicalRaw = raw.lowercase()
+            val uri = runCatching { URI(if (canonicalRaw.contains("://")) canonicalRaw else "https://$canonicalRaw") }.getOrNull()
             val host = uri?.host?.lowercase()?.removeSuffix(".") ?: return null
-            if (uri.scheme != "https" || uri.userInfo != null || host.isBlank() || host.contains("@")) return null
+            if (!uri.scheme.equals("https", ignoreCase = true) || uri.userInfo != null || host.isBlank() || host.contains("@")) return null
             return host
         }
     }
