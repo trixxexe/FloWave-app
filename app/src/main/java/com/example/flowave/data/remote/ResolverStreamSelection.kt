@@ -24,7 +24,7 @@ object ResolverStreamSelector {
         val audioOnly = collect(adaptive).filter { it.audioOnly }
         return (audioOnly + collect(muxed).filterNot { it.audioOnly })
             .filter { it.audioCapable }
-            .maxWithOrNull(compareByDescending<StreamCandidate> { it.audioOnly }.thenByDescending { it.bitrate })
+            .maxWithOrNull(compareBy<StreamCandidate> { it.audioOnly }.thenBy { it.bitrate })
             ?.stream
     }
 
