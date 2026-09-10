@@ -114,7 +114,7 @@ class ResolverPool {
     @Synchronized
     fun restore(serialized: String) {
         serialized.lineSequence().forEach { line ->
-            val fields = line.split('|')
+            val fields = line.split("|")
             if (fields.size != 10) return@forEach
             runCatching {
                 upsert(ResolverCandidate(
