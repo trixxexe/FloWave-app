@@ -174,6 +174,7 @@ class FloWaveAudioEngine(private val context: Context) {
                         )
                     }
                 } catch (e: Exception) {
+                    logger.error("database", "queue_persist_failed", throwable = e)
                     android.util.Log.e("FloWaveAudioEngine", "Failed to persist queue: ${e.message}")
                 }
             }
@@ -196,6 +197,7 @@ class FloWaveAudioEngine(private val context: Context) {
                     )
                 )
             } catch (e: Exception) {
+                logger.warn("database", "queue_state_persist_failed", throwable = e)
                 // Ignore transient write errors
             }
         }

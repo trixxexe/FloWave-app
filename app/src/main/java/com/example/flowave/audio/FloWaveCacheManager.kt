@@ -66,6 +66,7 @@ object FloWaveCacheManager {
             cacheInstance?.removeResource(key)
         } catch (e: Exception) {
             android.util.Log.w("FloWaveCacheManager", "Failed to invalidate cache key $key", e)
+            return
         }
     }
 }
