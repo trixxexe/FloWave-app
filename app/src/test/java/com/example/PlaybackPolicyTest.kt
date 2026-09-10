@@ -62,4 +62,15 @@ class PlaybackPolicyTest {
         assertTrue(OnlinePlaybackPolicy.isCancellation(IOException("cancelled", CancellationException())))
         assertFalse(OnlinePlaybackPolicy.isCancellation(IOException("network failure")))
     }
+
+    @Test
+    fun `fallback host failures use bounded cooldowns`() {
+        assertEquals("rate_limited", OnlinePlaybackPolicy.classifyHttpStatus(429))
+        assertEquals("http_client_failure", OnlinePlaybackPolicy.classifyHttpStatus(404))
+        assertEquals("http_server_failure", OnlinePlaybackPolicy.classifyHttpStatus(503))
+        assertTrue(
+            OnlinePlaybackPolicy.hostCooldownMs("dns_unavailable") >
+                OnlinePlaybackPolicy.hostCooldownMs("timeout")
+        )
+    }
 }

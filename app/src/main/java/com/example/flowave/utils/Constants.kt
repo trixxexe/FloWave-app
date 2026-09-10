@@ -28,20 +28,18 @@ object FloWaveConstants {
         "https://pipedapi.mha.fi/search?"
     )
     
+    // Curated from the projects' published instance lists. These are only
+    // bounded fallbacks; InnerTube remains the primary resolver. Public
+    // instances are volatile, so the resolver also applies host cooldowns.
     val INVIDIOUS_SEARCH_INSTANCES = listOf(
-        "https://inv.tux.pizza/api/v1/search?q=",
-        "https://invidious.drgns.space/api/v1/search?q=",
-        "https://vid.puffyan.us/api/v1/search?q="
+        "https://inv.nadeko.net/api/v1/search?q=",
+        "https://invidious.nerdvpn.de/api/v1/search?q=",
+        "https://yt.chocolatemoo53.com/api/v1/search?q="
     )
-    
+
     val PIPED_STREAM_INSTANCES = listOf(
-        "https://pipedapi.colby.land/streams/",
-        "https://piped-api.garudalinux.org/streams/",
-        "https://pipedapi.tokhmi.xyz/streams/",
-        "https://pipedapi.privacydev.net/streams/",
-        "https://pipedapi.swg.dev/streams/",
-        "https://pipedapi.oxit.co/streams/",
         "https://pipedapi.kavin.rocks/streams/",
-        "https://api.piped.video/streams/"
+        "https://pipedapi.leptons.xyz/streams/",
+        "https://pipedapi.nosebs.ru/streams/"
     )
 }

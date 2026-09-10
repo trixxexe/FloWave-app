@@ -31,6 +31,8 @@ data class InnerTubeClientConfig(
     val userAgent: String
 )
 
+private data class FallbackHostState(val retryAfterMs: Long, val failureClass: String)
+
 object InnerTubeClients {
     val ANDROID_TESTSUITE = InnerTubeClientConfig(
         clientName = "ANDROID_TESTSUITE",
@@ -195,6 +197,55 @@ class InnerTubeRepository(context: Context? = null) {
 
     private fun isStreamUrlExpired(url: String): Boolean =
         com.example.flowave.audio.OnlinePlaybackPolicy.isExpired(url)
+
+    private fun fallbackHost(endpoint: String): String = endpoint
+        .substringAfter("://", endpoint)
+        .substringBefore('/')
+        .lowercase()
+
+    private fun fallbackHostAvailable(host: String): Boolean {
+        val state = fallbackHostStates[host] ?: return true
+        if (System.currentTimeMillis() >= state.retryAfterMs) {
+            fallbackHostStates.remove(host, state)
+            return true
+        }
+        logger?.debug("online", "resolver_host_skipped", context = mapOf(
+            "resolver" to "fallback",
+            "host" to host,
+            "failureClass" to state.failureClass,
+            "retryAfterMs" to state.retryAfterMs
+        ))
+        return false
+    }
+
+    private fun recordFallbackFailure(
+        videoId: String,
+        resolver: String,
+        endpoint: String,
+        attempt: Int,
+        startedAtNs: Long,
+        status: Int? = null,
+        error: Throwable? = null
+    ) {
+        val failureClass = status?.let { com.example.flowave.audio.OnlinePlaybackPolicy.classifyHttpStatus(it) }
+            ?: error?.let { com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(it) }
+            ?: "resolver_error"
+        if (failureClass == "cancelled") return
+        val host = fallbackHost(endpoint)
+        val retryAfterMs = System.currentTimeMillis() +
+            com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass)
+        fallbackHostStates[host] = FallbackHostState(retryAfterMs, failureClass)
+        logger?.warn("online", "resolver_attempt_failed", context = mapOf(
+            "videoId" to videoId,
+            "resolver" to resolver,
+            "host" to host,
+            "attempt" to attempt,
+            "failureClass" to failureClass,
+            "httpStatus" to status,
+            "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L),
+            "retryAfterMs" to retryAfterMs
+        ), throwable = error)
+    }
 
     suspend fun searchTracks(query: String): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
@@ -628,6 +679,9 @@ class InnerTubeRepository(context: Context? = null) {
 
         // Piped Public API Fallback Stream Extraction
         for ((attempt, instance) in com.example.flowave.utils.FloWaveConstants.PIPED_STREAM_INSTANCES.take(3).withIndex()) {
+            val host = fallbackHost(instance)
+            if (!fallbackHostAvailable(host)) continue
+            val startedAtNs = System.nanoTime()
             try {
                 val request = Request.Builder()
                     .url("$instance$videoId")
@@ -651,12 +705,27 @@ class InnerTubeRepository(context: Context? = null) {
                                 }
                             }
                             if (bestPipedUrl != null) {
-                                logger?.info("online", "piped_fallback_succeeded", context = mapOf("videoId" to videoId))
+                                logger?.info("online", "piped_fallback_succeeded", context = mapOf(
+                                    "videoId" to videoId,
+                                    "host" to host,
+                                    "attempt" to attempt + 1,
+                                    "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
+                                ))
+                                fallbackHostStates.remove(host)
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), bestPipedUrl)
                                 return@withContext bestPipedUrl
                             }
                         }
                     }
+                    recordFallbackFailure(
+                        videoId = videoId,
+                        resolver = "piped",
+                        endpoint = instance,
+                        attempt = attempt + 1,
+                        startedAtNs = startedAtNs,
+                        status = response.code.takeIf { !response.isSuccessful },
+                        error = IOException("Piped response contained no usable audio stream")
+                    )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -664,17 +733,15 @@ class InnerTubeRepository(context: Context? = null) {
                 Thread.currentThread().interrupt()
                 throw e
             } catch (e: Exception) {
-                logger?.warn("online", "resolver_attempt_failed", context = mapOf(
-                    "videoId" to videoId,
-                    "resolver" to "piped",
-                    "attempt" to attempt + 1,
-                    "failureClass" to com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(e)
-                ), throwable = e)
+                recordFallbackFailure(videoId, "piped", instance, attempt + 1, startedAtNs, error = e)
             }
         }
 
         // Invidious Direct Fallback Stream Extraction
         for ((attempt, searchInstance) in com.example.flowave.utils.FloWaveConstants.INVIDIOUS_SEARCH_INSTANCES.take(2).withIndex()) {
+            val host = fallbackHost(searchInstance)
+            if (!fallbackHostAvailable(host)) continue
+            val startedAtNs = System.nanoTime()
             try {
                 val baseUrl = if (searchInstance.contains("api/v1/")) {
                     searchInstance.substringBefore("api/v1/")
@@ -689,10 +756,25 @@ class InnerTubeRepository(context: Context? = null) {
                     .build()
                 fastClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful || response.code in 300..399) {
-                        logger?.info("online", "invidious_fallback_succeeded", context = mapOf("videoId" to videoId))
+                        logger?.info("online", "invidious_fallback_succeeded", context = mapOf(
+                            "videoId" to videoId,
+                            "host" to host,
+                            "attempt" to attempt + 1,
+                            "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
+                        ))
+                        fallbackHostStates.remove(host)
                         streamUrlCache[videoId] = Pair(System.currentTimeMillis(), testUrl)
                         return@withContext testUrl
                     }
+                    recordFallbackFailure(
+                        videoId = videoId,
+                        resolver = "invidious",
+                        endpoint = searchInstance,
+                        attempt = attempt + 1,
+                        startedAtNs = startedAtNs,
+                        status = response.code,
+                        error = IOException("Invidious response did not provide a stream")
+                    )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -700,12 +782,7 @@ class InnerTubeRepository(context: Context? = null) {
                 Thread.currentThread().interrupt()
                 throw e
             } catch (e: Exception) {
-                logger?.warn("online", "resolver_attempt_failed", context = mapOf(
-                    "videoId" to videoId,
-                    "resolver" to "invidious",
-                    "attempt" to attempt + 1,
-                    "failureClass" to com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(e)
-                ), throwable = e)
+                recordFallbackFailure(videoId, "invidious", searchInstance, attempt + 1, startedAtNs, error = e)
             }
         }
 
@@ -1004,5 +1081,7 @@ class InnerTubeRepository(context: Context? = null) {
         var scrapedClientVersion: String? = null
         @Volatile
         var lastScrapedTimeMs: Long = 0L
+
+        private val fallbackHostStates = ConcurrentHashMap<String, FallbackHostState>()
     }
 }

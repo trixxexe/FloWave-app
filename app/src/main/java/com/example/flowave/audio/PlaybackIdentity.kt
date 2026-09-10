@@ -63,4 +63,18 @@ object OnlinePlaybackPolicy {
         }
         return "resolver_error"
     }
+
+    fun classifyHttpStatus(status: Int): String = when {
+        status == 429 -> "rate_limited"
+        status in 400..499 -> "http_client_failure"
+        status >= 500 -> "http_server_failure"
+        else -> "http_failure"
+    }
+
+    fun hostCooldownMs(failureClass: String): Long = when (failureClass) {
+        "dns_unavailable", "connection_refused", "tls_failure" -> 15 * 60 * 1000L
+        "rate_limited" -> 5 * 60 * 1000L
+        "timeout", "http_server_failure" -> 2 * 60 * 1000L
+        else -> 60 * 1000L
+    }
 }
