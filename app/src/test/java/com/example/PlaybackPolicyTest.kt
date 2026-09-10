@@ -72,5 +72,6 @@ class PlaybackPolicyTest {
             OnlinePlaybackPolicy.hostCooldownMs("dns_unavailable") >
                 OnlinePlaybackPolicy.hostCooldownMs("timeout")
         )
+        assertEquals(0L, OnlinePlaybackPolicy.hostCooldownMs("extraction_failure"))
     }
 }
