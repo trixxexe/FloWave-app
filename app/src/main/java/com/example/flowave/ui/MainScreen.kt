@@ -200,6 +200,7 @@ fun MainScreen() {
     val currentTrack = playbackState.currentTrack
     val currentPosition = playbackState.currentPositionMs
     val isPlaying = playbackState.isPlaying
+    val themeMode = SettingsSchema.getValue(settingsJson, "theme_mode")
 
     // Track active listening duration
     LaunchedEffect(currentTrack) {
@@ -266,10 +267,11 @@ fun MainScreen() {
                     .background(Color.Black.copy(alpha = 0.7f))
             )
         } else {
-            val bgBrush = when (userProfile.backgroundPreset) {
-                "AMOLED_DARK" -> Brush.verticalGradient(listOf(Color.Black, Color.Black))
-                "CYBER_CYAN" -> Brush.verticalGradient(listOf(Color(0xFF031D24), Color(0xFF070B10)))
-                "NEON_PURPLE" -> Brush.verticalGradient(listOf(Color(0xFF1B0326), Color(0xFF070B10)))
+            val bgBrush = when {
+                themeMode == "AMOLED_DARK" -> Brush.verticalGradient(listOf(Color.Black, Color.Black))
+                userProfile.backgroundPreset == "AMOLED_DARK" -> Brush.verticalGradient(listOf(Color.Black, Color.Black))
+                userProfile.backgroundPreset == "CYBER_CYAN" -> Brush.verticalGradient(listOf(Color(0xFF031D24), Color(0xFF070B10)))
+                userProfile.backgroundPreset == "NEON_PURPLE" -> Brush.verticalGradient(listOf(Color(0xFF1B0326), Color(0xFF070B10)))
                 else -> Brush.verticalGradient(listOf(DarkBackground, Color(0xFF121820), DarkBackground))
             }
             Box(
@@ -301,7 +303,8 @@ fun MainScreen() {
                                 onExpandClick = { isPlayerExpanded = true },
                                 onCloseClick = { isMiniPlayerDismissed = true },
                                 onRetryClick = { audioEngine.retryCurrentTrack() },
-                                onSeek = { pos -> audioEngine.seekTo(pos) }
+                                onSeek = { pos -> audioEngine.seekTo(pos) },
+                                showProgress = SettingsSchema.getBoolean(settingsJson, "show_mini_player_progress")
                             )
                         }
 
@@ -611,6 +614,7 @@ fun MainScreen() {
             PlayerScreen(
                 audioEngine = audioEngine,
                 lrcLines = currentLrcLines,
+                settingsJson = settingsJson,
                 onCloseClick = { isPlayerExpanded = false },
                 onOpenEqualizerClick = {
                     isPlayerExpanded = false

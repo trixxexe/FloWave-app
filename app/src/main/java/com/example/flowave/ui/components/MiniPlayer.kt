@@ -42,6 +42,7 @@ fun MiniPlayer(
     onCloseClick: () -> Unit,
     onRetryClick: () -> Unit = {},
     onSeek: (Long) -> Unit = {},
+    showProgress: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val track = playbackState.currentTrack ?: return
@@ -192,7 +193,7 @@ fun MiniPlayer(
             }
 
             // Sleek Progress Line
-            if (playbackState.durationMs > 0) {
+            if (showProgress && playbackState.durationMs > 0) {
                 val posMs = playbackState.currentPositionMs
                 val durMs = playbackState.durationMs.coerceAtLeast(1L)
                 var sliderPos by remember { mutableFloatStateOf(0f) }

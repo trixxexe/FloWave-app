@@ -33,6 +33,7 @@ import com.example.flowave.ui.components.DynamicAudioDeviceSelectorPill
 import com.example.flowave.ui.components.GlassCard
 import com.example.flowave.ui.components.VisualizerType
 import com.example.flowave.ui.theme.*
+import com.example.flowave.utils.SettingsSchema
 
 @Composable
 fun PlayerScreen(
@@ -40,6 +41,7 @@ fun PlayerScreen(
     lrcLines: List<LrcLine>,
     onCloseClick: () -> Unit,
     onOpenEqualizerClick: () -> Unit,
+    settingsJson: String = SettingsSchema.getDefaultJson(),
     modifier: Modifier = Modifier
 ) {
     val playbackState by audioEngine.playbackState.collectAsStateWithLifecycle()
@@ -201,14 +203,16 @@ fun PlayerScreen(
                     }
 
                     // Audio Visualizer Canvas Layer Overlay
-                    CanvasVisualizer(
-                        waveform = visualizerWaveform,
-                        type = selectedVisualizerType,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .align(Alignment.BottomCenter)
-                    )
+                    if (SettingsSchema.getBoolean(settingsJson, "show_visualizer")) {
+                        CanvasVisualizer(
+                            waveform = visualizerWaveform,
+                            type = selectedVisualizerType,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp)
+                                .align(Alignment.BottomCenter)
+                        )
+                    }
                 }
 
                 // Visualizer Mode Selector Row

@@ -76,6 +76,8 @@ fun ProfileScreen(
     var activeStringDef by remember { mutableStateOf<SettingDefinition?>(null) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showCustomColorDialog by remember { mutableStateOf(false) }
+    var legalDocument by remember { mutableStateOf<String?>(null) }
+    var legalDocumentTitle by remember { mutableStateOf("") }
 
     val scrollState = rememberScrollState()
 
@@ -327,7 +329,7 @@ fun ProfileScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         // Render dynamic categories
-        val categories = listOf("Audio", "Appearance", "Gestures")
+        val categories = listOf("Audio", "Playback", "Appearance")
         categories.forEach { category ->
             val defs = SettingsSchema.DEFINITIONS.filter { it.category == category }
             if (defs.isNotEmpty()) {
@@ -596,6 +598,33 @@ fun ProfileScreen(
             onClearAll = onClearAllDiagnostics,
             onProtect = onProtectDiagnostic
         )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text("Legal & privacy", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        Spacer(modifier = Modifier.height(8.dp))
+        GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Read these documents offline", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                Text("Draft documents describe the current implementation and require legal review before public release.", color = TextMuted, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            legalDocumentTitle = "Privacy Policy (Draft)"
+                            legalDocument = runCatching { context.assets.open("legal/PRIVACY_POLICY.md").bufferedReader().use { it.readText() } }.getOrNull()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Privacy") }
+                    OutlinedButton(
+                        onClick = {
+                            legalDocumentTitle = "Terms of Service (Draft)"
+                            legalDocument = runCatching { context.assets.open("legal/TERMS_OF_SERVICE.md").bufferedReader().use { it.readText() } }.getOrNull()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Terms") }
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -970,6 +999,20 @@ fun ProfileScreen(
             },
             containerColor = DarkSurface,
             shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    legalDocument?.let { document ->
+        AlertDialog(
+            onDismissRequest = { legalDocument = null },
+            title = { Text(legalDocumentTitle, color = TextPrimary) },
+            text = {
+                Box(modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
+                    Text(document, color = TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+            },
+            confirmButton = { TextButton(onClick = { legalDocument = null }) { Text("Close", color = CyanNeon) } },
+            containerColor = DarkSurface
         )
     }
 }
