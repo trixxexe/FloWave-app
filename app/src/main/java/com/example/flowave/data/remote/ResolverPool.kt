@@ -28,7 +28,7 @@ data class ResolverCandidate(
 
     fun endpoint(): String = when (type) {
         ResolverType.PIPED -> "https://$host/streams/"
-        ResolverType.INVIDIOUS -> "https://$host/api/v1/latest_version?id="
+        ResolverType.INVIDIOUS -> "https://$host/api/v1/videos/"
     }
 }
 

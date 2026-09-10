@@ -72,7 +72,48 @@ class FloWaveDataSourceFactory(
                         .setUri(Uri.parse(resolvedUrl))
                         .setKey(videoId)
                         .build()
-                    return activeDataSource?.open(resolvedSpec) ?: -1L
+                    val openedLength = activeDataSource?.open(resolvedSpec) ?: -1L
+                    val headers = activeDataSource?.responseHeaders.orEmpty()
+                    val contentType = headers.entries
+                        .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+                        ?.value?.firstOrNull()
+                    val contentLength = headers.entries
+                        .firstOrNull { it.key.equals("Content-Length", ignoreCase = true) }
+                        ?.value?.firstOrNull()
+                    val range = headers.entries
+                        .firstOrNull { it.key.equals("Content-Range", ignoreCase = true) }
+                        ?.value?.firstOrNull()
+                    val acceptRanges = headers.entries
+                        .firstOrNull { it.key.equals("Accept-Ranges", ignoreCase = true) }
+                        ?.value?.firstOrNull()
+                    logger.info("online", "stream_open_response", context = mapOf(
+                        "videoId" to videoId,
+                        "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
+                        "contentLength" to (contentLength ?: openedLength.toString()),
+                        "contentRange" to range.orEmpty().take(80),
+                        "acceptRanges" to acceptRanges.orEmpty().take(32),
+                        "openedLength" to openedLength,
+                        "urlHost" to resolvedSpec.uri.host.orEmpty(),
+                        "urlPath" to resolvedSpec.uri.path.orEmpty().take(80)
+                    ))
+                    if (!com.example.flowave.data.remote.ResolverStreamSelector.isPlayableResponseContentType(contentType)) {
+                        activeDataSource?.close()
+                        activeDataSource = null
+                        streamRepository.invalidateStreamUrl(videoId)
+                        FloWaveCacheManager.invalidate(videoId)
+                        logger.error("online", "stream_open_rejected", context = mapOf(
+                            "videoId" to videoId,
+                            "reason" to "non_media_content_type",
+                            "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase()
+                        ))
+                        throw java.io.IOException("Resolved stream returned non-media content")
+                    }
+                    logger.info("online", "playable_stream_validation_success", context = mapOf(
+                        "videoId" to videoId,
+                        "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
+                        "openedLength" to openedLength
+                    ))
+                    return openedLength
                 }
                 activeDataSource = if (scheme == "http" || scheme == "https") cacheDataSource else defaultDataSource
                 return activeDataSource?.open(dataSpec) ?: -1L
