@@ -132,13 +132,16 @@ object SettingsSchema {
     }
 
     fun getValue(jsonStr: String, key: String): String {
-        val json = try { JSONObject(jsonStr) } catch (e: Exception) { JSONObject() }
         val def = DEFINITIONS.firstOrNull { it.key == key } ?: return ""
-        return if (json.has(key)) {
-            json.get(key).toString()
-        } else {
-            def.defaultValue
-        }
+        val token = Regex("\\\"${Regex.escape(key)}\\\"\\s*:\\s*(\\\"(?:\\\\.|[^\\\"\\\\])*\\\"|true|false|-?\\d+(?:\\.\\d+)?)")
+            .find(jsonStr)?.groupValues?.getOrNull(1)
+        if (token.isNullOrBlank()) return def.defaultValue
+        return if (token.startsWith('"') && token.endsWith('"')) {
+            token.substring(1, token.length - 1)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .replace("\\n", "\n")
+        } else token
     }
 
     fun getBoolean(jsonStr: String, key: String): Boolean {
