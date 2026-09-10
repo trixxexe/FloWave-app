@@ -11,6 +11,8 @@ import com.example.flowave.diagnostics.FloWaveLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -30,8 +32,6 @@ data class InnerTubeClientConfig(
     val clientVersion: String,
     val userAgent: String
 )
-
-private data class FallbackHostState(val retryAfterMs: Long, val failureClass: String)
 
 object InnerTubeClients {
     val ANDROID_TESTSUITE = InnerTubeClientConfig(
@@ -95,6 +95,18 @@ class InnerTubeRepository(context: Context? = null) {
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
     private val streamResolutionLocks = ConcurrentHashMap<String, Mutex>()
     val streamDurationCache = ConcurrentHashMap<String, Long>()
+    private val fallbackPool = ResolverPool().apply {
+        seed(ResolverType.PIPED, FloWaveConstants.PIPED_STREAM_INSTANCES, "curated", System.currentTimeMillis())
+        seed(ResolverType.INVIDIOUS, FloWaveConstants.INVIDIOUS_SEARCH_INSTANCES, "curated", System.currentTimeMillis())
+    }
+    private val fallbackPersistence = appContext?.let { ResolverPoolPersistence(it) }
+    private val invidiousDiscovery = appContext?.let { InvidiousInstanceDiscovery(client) }
+    private val discoveryMutex = Mutex()
+    private var lastDiscoveryAttemptMs = 0L
+
+    init {
+        fallbackPersistence?.load()?.takeIf { it.isNotBlank() }?.let { fallbackPool.restore(it) }
+    }
 
     fun getCachedDuration(videoId: String): Long {
         return streamDurationCache[videoId] ?: 0L
@@ -198,53 +210,104 @@ class InnerTubeRepository(context: Context? = null) {
     private fun isStreamUrlExpired(url: String): Boolean =
         com.example.flowave.audio.OnlinePlaybackPolicy.isExpired(url)
 
-    private fun fallbackHost(endpoint: String): String = endpoint
-        .substringAfter("://", endpoint)
-        .substringBefore('/')
-        .lowercase()
-
-    private fun fallbackHostAvailable(host: String): Boolean {
-        val state = fallbackHostStates[host] ?: return true
-        if (System.currentTimeMillis() >= state.retryAfterMs) {
-            fallbackHostStates.remove(host, state)
-            return true
-        }
-        logger?.debug("online", "resolver_host_skipped", context = mapOf(
-            "resolver" to "fallback",
-            "host" to host,
-            "failureClass" to state.failureClass,
-            "retryAfterMs" to state.retryAfterMs
-        ))
-        return false
-    }
-
     private fun recordFallbackFailure(
         videoId: String,
         resolver: String,
-        endpoint: String,
+        candidate: ResolverCandidate,
         attempt: Int,
         startedAtNs: Long,
         status: Int? = null,
-        error: Throwable? = null
+        error: Throwable? = null,
+        failureClassOverride: String? = null,
+        penalizeHost: Boolean = true
     ) {
-        val failureClass = status?.let { com.example.flowave.audio.OnlinePlaybackPolicy.classifyHttpStatus(it) }
+        val failureClass = failureClassOverride
+            ?: status?.let { com.example.flowave.audio.OnlinePlaybackPolicy.classifyHttpStatus(it) }
             ?: error?.let { com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(it) }
             ?: "resolver_error"
         if (failureClass == "cancelled") return
-        val host = fallbackHost(endpoint)
-        val retryAfterMs = System.currentTimeMillis() +
-            com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass)
-        fallbackHostStates[host] = FallbackHostState(retryAfterMs, failureClass)
+        val now = System.currentTimeMillis()
+        val cooldownMs = com.example.flowave.audio.OnlinePlaybackPolicy.hostCooldownMs(failureClass)
+        val retryAfterMs = now + cooldownMs
+        if (penalizeHost && cooldownMs > 0L) {
+            fallbackPool.markFailure(candidate.key, failureClass, cooldownMs, now)
+            fallbackPersistence?.save(fallbackPool.serialize())
+        }
         logger?.warn("online", "resolver_attempt_failed", context = mapOf(
             "videoId" to videoId,
             "resolver" to resolver,
-            "host" to host,
+            "host" to candidate.host,
             "attempt" to attempt,
             "failureClass" to failureClass,
             "httpStatus" to status,
             "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L),
             "retryAfterMs" to retryAfterMs
         ), throwable = error)
+    }
+
+    private suspend fun discoverFallbacks(): Boolean = discoveryMutex.withLock {
+        val now = System.currentTimeMillis()
+        if (now - lastDiscoveryAttemptMs < DISCOVERY_MIN_INTERVAL_MS) return@withLock false
+        lastDiscoveryAttemptMs = now
+        val discovery = invidiousDiscovery ?: return@withLock false
+        val startedAt = System.nanoTime()
+        logger?.info("online", "resolver_discovery_started", context = mapOf("source" to "invidious_registry"))
+        return@withLock try {
+            val discovered = withTimeoutOrNull(DISCOVERY_TOTAL_TIMEOUT_MS) { discovery.discover() }
+            if (discovered == null) {
+                logger?.warn("online", "resolver_discovery_failed", context = mapOf(
+                    "source" to "invidious_registry",
+                    "failureClass" to "timeout",
+                    "durationMs" to ((System.nanoTime() - startedAt) / 1_000_000L)
+                ))
+                return@withLock false
+            }
+            var validated = 0
+            discovered.take(MAX_DISCOVERED_CANDIDATES).forEach { candidate ->
+                try {
+                    val latency = withTimeoutOrNull(DISCOVERY_VALIDATION_TIMEOUT_MS) {
+                        discovery.validate(candidate)
+                    }
+                    if (latency != null) {
+                        val validatedCandidate = candidate.copy(validationMs = System.currentTimeMillis())
+                        fallbackPool.upsert(validatedCandidate)
+                        fallbackPool.markSuccess(validatedCandidate.key, latency, System.currentTimeMillis())
+                        validated++
+                        logger?.info("online", "resolver_candidate_promoted", context = mapOf(
+                            "resolver" to "invidious",
+                            "host" to candidate.host,
+                            "source" to candidate.source,
+                            "durationMs" to latency
+                        ))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    logger?.debug("online", "resolver_candidate_rejected", context = mapOf(
+                        "resolver" to "invidious",
+                        "host" to candidate.host,
+                        "failureClass" to com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(error)
+                    ))
+                }
+            }
+            fallbackPersistence?.save(fallbackPool.serialize())
+            logger?.info("online", "resolver_discovery_finished", context = mapOf(
+                "source" to "invidious_registry",
+                "candidateCount" to discovered.size,
+                "validatedCount" to validated,
+                "durationMs" to ((System.nanoTime() - startedAt) / 1_000_000L)
+            ))
+            validated > 0
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            logger?.warn("online", "resolver_discovery_failed", context = mapOf(
+                "source" to "invidious_registry",
+                "failureClass" to com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(error),
+                "durationMs" to ((System.nanoTime() - startedAt) / 1_000_000L)
+            ), throwable = error)
+            false
+        }
     }
 
     suspend fun searchTracks(query: String): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
@@ -529,7 +592,11 @@ class InnerTubeRepository(context: Context? = null) {
         }
     }
 
-    private suspend fun getStreamUrlInternal(videoId: String, forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
+    private suspend fun getStreamUrlInternal(
+        videoId: String,
+        forceRefresh: Boolean = false,
+        allowDiscovery: Boolean = true
+    ): String = withContext(Dispatchers.IO) {
         cleanExpiredStreamCache()
         if (forceRefresh) {
             streamUrlCache.remove(videoId)
@@ -678,9 +745,9 @@ class InnerTubeRepository(context: Context? = null) {
         }
 
         // Piped Public API Fallback Stream Extraction
-        for ((attempt, instance) in com.example.flowave.utils.FloWaveConstants.PIPED_STREAM_INSTANCES.take(3).withIndex()) {
-            val host = fallbackHost(instance)
-            if (!fallbackHostAvailable(host)) continue
+        for ((attempt, candidate) in fallbackPool.ranked(ResolverType.PIPED, System.currentTimeMillis()).take(3).withIndex()) {
+            val host = candidate.host
+            val instance = candidate.endpoint()
             val startedAtNs = System.nanoTime()
             try {
                 val request = Request.Builder()
@@ -711,7 +778,8 @@ class InnerTubeRepository(context: Context? = null) {
                                     "attempt" to attempt + 1,
                                     "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
                                 ))
-                                fallbackHostStates.remove(host)
+                                fallbackPool.markSuccess(candidate.key, (System.nanoTime() - startedAtNs) / 1_000_000L, System.currentTimeMillis())
+                                fallbackPersistence?.save(fallbackPool.serialize())
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), bestPipedUrl)
                                 return@withContext bestPipedUrl
                             }
@@ -720,11 +788,13 @@ class InnerTubeRepository(context: Context? = null) {
                     recordFallbackFailure(
                         videoId = videoId,
                         resolver = "piped",
-                        endpoint = instance,
+                        candidate = candidate,
                         attempt = attempt + 1,
                         startedAtNs = startedAtNs,
                         status = response.code.takeIf { !response.isSuccessful },
-                        error = IOException("Piped response contained no usable audio stream")
+                        error = IOException("Piped response contained no usable audio stream"),
+                        failureClassOverride = "extraction_failure",
+                        penalizeHost = false
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -733,14 +803,14 @@ class InnerTubeRepository(context: Context? = null) {
                 Thread.currentThread().interrupt()
                 throw e
             } catch (e: Exception) {
-                recordFallbackFailure(videoId, "piped", instance, attempt + 1, startedAtNs, error = e)
+                recordFallbackFailure(videoId, "piped", candidate, attempt + 1, startedAtNs, error = e)
             }
         }
 
         // Invidious Direct Fallback Stream Extraction
-        for ((attempt, searchInstance) in com.example.flowave.utils.FloWaveConstants.INVIDIOUS_SEARCH_INSTANCES.take(2).withIndex()) {
-            val host = fallbackHost(searchInstance)
-            if (!fallbackHostAvailable(host)) continue
+        for ((attempt, candidate) in fallbackPool.ranked(ResolverType.INVIDIOUS, System.currentTimeMillis()).take(2).withIndex()) {
+            val host = candidate.host
+            val searchInstance = "https://$host/api/v1/search?q="
             val startedAtNs = System.nanoTime()
             try {
                 val baseUrl = if (searchInstance.contains("api/v1/")) {
@@ -762,14 +832,15 @@ class InnerTubeRepository(context: Context? = null) {
                             "attempt" to attempt + 1,
                             "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
                         ))
-                        fallbackHostStates.remove(host)
+                        fallbackPool.markSuccess(candidate.key, (System.nanoTime() - startedAtNs) / 1_000_000L, System.currentTimeMillis())
+                        fallbackPersistence?.save(fallbackPool.serialize())
                         streamUrlCache[videoId] = Pair(System.currentTimeMillis(), testUrl)
                         return@withContext testUrl
                     }
                     recordFallbackFailure(
                         videoId = videoId,
                         resolver = "invidious",
-                        endpoint = searchInstance,
+                        candidate = candidate,
                         attempt = attempt + 1,
                         startedAtNs = startedAtNs,
                         status = response.code,
@@ -782,11 +853,14 @@ class InnerTubeRepository(context: Context? = null) {
                 Thread.currentThread().interrupt()
                 throw e
             } catch (e: Exception) {
-                recordFallbackFailure(videoId, "invidious", searchInstance, attempt + 1, startedAtNs, error = e)
+                recordFallbackFailure(videoId, "invidious", candidate, attempt + 1, startedAtNs, error = e)
             }
         }
 
         // All extraction candidates exhausted, throw a clear extraction exception to fail cleanly without fake test streams
+        if (allowDiscovery && discoverFallbacks()) {
+            return@withContext getStreamUrlInternal(videoId, forceRefresh, allowDiscovery = false)
+        }
         throw java.io.IOException("All extraction attempts and fallback clients were exhausted for videoId: $videoId")
     }
 
@@ -1067,6 +1141,11 @@ class InnerTubeRepository(context: Context? = null) {
     }
 
     companion object {
+        private const val DISCOVERY_MIN_INTERVAL_MS = 15 * 60 * 1000L
+        private const val DISCOVERY_TOTAL_TIMEOUT_MS = 20_000L
+        private const val DISCOVERY_VALIDATION_TIMEOUT_MS = 4_000L
+        private const val MAX_DISCOVERED_CANDIDATES = 6
+
         @Volatile
         private var instance: InnerTubeRepository? = null
 
@@ -1082,6 +1161,5 @@ class InnerTubeRepository(context: Context? = null) {
         @Volatile
         var lastScrapedTimeMs: Long = 0L
 
-        private val fallbackHostStates = ConcurrentHashMap<String, FallbackHostState>()
     }
 }

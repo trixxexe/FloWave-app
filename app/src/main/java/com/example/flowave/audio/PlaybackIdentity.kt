@@ -72,6 +72,7 @@ object OnlinePlaybackPolicy {
     }
 
     fun hostCooldownMs(failureClass: String): Long = when (failureClass) {
+        "extraction_failure" -> 0L
         "dns_unavailable", "connection_refused", "tls_failure" -> 15 * 60 * 1000L
         "rate_limited" -> 5 * 60 * 1000L
         "timeout", "http_server_failure" -> 2 * 60 * 1000L
