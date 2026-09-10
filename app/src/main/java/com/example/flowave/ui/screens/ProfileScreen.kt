@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +33,8 @@ import com.example.flowave.ui.theme.*
 import com.example.flowave.utils.SettingsSchema
 import com.example.flowave.utils.SettingDefinition
 import com.example.flowave.utils.SettingType
+import com.example.flowave.diagnostics.DiagnosticEntry
+import com.example.flowave.diagnostics.DiagnosticLevel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,6 +53,11 @@ fun ProfileScreen(
     onSettingUpdated: (String, Any) -> Unit = { _, _ -> },
     onExportSettings: suspend () -> String = { "" },
     onImportSettings: suspend (String) -> Boolean = { _ -> false },
+    diagnosticEntries: List<DiagnosticEntry> = emptyList(),
+    onExportDiagnostics: () -> Unit = {},
+    onClearUnsavedDiagnostics: () -> Unit = {},
+    onClearAllDiagnostics: () -> Unit = {},
+    onProtectDiagnostic: (String, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -581,6 +589,17 @@ fun ProfileScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         // Listening Statistics
+        DiagnosticLogsCard(
+            entries = diagnosticEntries,
+            onExport = onExportDiagnostics,
+            onClearUnsaved = onClearUnsavedDiagnostics,
+            onClearAll = onClearAllDiagnostics,
+            onProtect = onProtectDiagnostic
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Listening Statistics
         Text("Analytics & Usage Metrics", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -951,6 +970,145 @@ fun ProfileScreen(
             },
             containerColor = DarkSurface,
             shape = RoundedCornerShape(20.dp)
+        )
+    }
+}
+
+@Composable
+private fun DiagnosticLogsCard(
+    entries: List<DiagnosticEntry>,
+    onExport: () -> Unit,
+    onClearUnsaved: () -> Unit,
+    onClearAll: () -> Unit,
+    onProtect: (String, Boolean) -> Unit
+) {
+    var levelFilter by remember { mutableStateOf<DiagnosticLevel?>(null) }
+    var categoryFilter by remember { mutableStateOf<String?>(null) }
+    var categoryMenuOpen by remember { mutableStateOf(false) }
+    var confirmClearAll by remember { mutableStateOf(false) }
+    val categories = entries.map { it.category }.distinct().sorted()
+    val filtered = entries.filter { entry ->
+        (levelFilter == null || entry.level == levelFilter) &&
+            (categoryFilter == null || entry.category == categoryFilter)
+    }.takeLast(60).reversed()
+
+    Text("Diagnostics & Logs", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+    Spacer(modifier = Modifier.height(8.dp))
+    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 20.dp) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "${entries.size} recent entries • ${entries.count { it.protected }} protected",
+                color = TextMuted,
+                fontSize = 11.sp
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilterChip(
+                    selected = levelFilter == null,
+                    onClick = { levelFilter = null },
+                    label = { Text("All") }
+                )
+                DiagnosticLevel.values().forEach { level ->
+                    FilterChip(
+                        selected = levelFilter == level,
+                        onClick = { levelFilter = if (levelFilter == level) null else level },
+                        label = { Text(level.name) }
+                    )
+                }
+                Box {
+                    FilterChip(
+                        selected = categoryFilter != null,
+                        onClick = { categoryMenuOpen = true },
+                        label = { Text(categoryFilter ?: "Category") },
+                        leadingIcon = { Icon(Icons.Default.FilterList, null, modifier = Modifier.size(14.dp)) }
+                    )
+                    DropdownMenu(
+                        expanded = categoryMenuOpen,
+                        onDismissRequest = { categoryMenuOpen = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("All categories") },
+                            onClick = { categoryFilter = null; categoryMenuOpen = false }
+                        )
+                        categories.forEach { category ->
+                            DropdownMenuItem(
+                                text = { Text(category) },
+                                onClick = { categoryFilter = category; categoryMenuOpen = false }
+                            )
+                        }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onExport, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.FileDownload, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Export")
+                }
+                OutlinedButton(onClick = onClearUnsaved, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Clear unsaved")
+                }
+            }
+            TextButton(onClick = { confirmClearAll = true }) {
+                Text("Clear all logs", color = MaterialTheme.colorScheme.error)
+            }
+            if (filtered.isEmpty()) {
+                Text("No diagnostic entries match this filter.", color = TextMuted, fontSize = 12.sp)
+            } else {
+                filtered.forEach { entry ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            if (entry.protected) Icons.Default.Lock else Icons.Default.Info,
+                            contentDescription = null,
+                            tint = if (entry.level == DiagnosticLevel.ERROR) MaterialTheme.colorScheme.error else CyanNeon,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "${entry.level} • ${entry.category}/${entry.event}",
+                                color = TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(entry.message.ifBlank { "—" }, color = TextMuted, fontSize = 11.sp, maxLines = 2)
+                        }
+                        IconButton(
+                            onClick = { onProtect(entry.id, !entry.protected) },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                if (entry.protected) Icons.Default.LockOpen else Icons.Default.Lock,
+                                contentDescription = if (entry.protected) "Unprotect" else "Protect",
+                                tint = PurpleNeon,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (confirmClearAll) {
+        AlertDialog(
+            onDismissRequest = { confirmClearAll = false },
+            title = { Text("Clear all diagnostic logs?") },
+            text = { Text("This permanently removes protected and unsaved entries.") },
+            confirmButton = {
+                Button(onClick = { confirmClearAll = false; onClearAll() }) {
+                    Text("Clear all")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearAll = false }) { Text("Cancel") }
+            }
         )
     }
 }

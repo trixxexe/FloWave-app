@@ -9,6 +9,7 @@ import com.example.flowave.data.model.ListeningStat
 import com.example.flowave.data.model.Playlist
 import com.example.flowave.data.model.PlaylistTrackCrossRef
 import com.example.flowave.data.model.Track
+import com.example.flowave.diagnostics.FloWaveLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -16,6 +17,7 @@ import java.io.File
 import java.util.ArrayDeque
 
 class FloWaveRepository(private val context: Context) {
+    private val logger = FloWaveLogger.getInstance(context)
     private val db = AppDatabase.getDatabase(context)
     private val trackDao = db.trackDao()
     private val playlistDao = db.playlistDao()
@@ -90,6 +92,7 @@ class FloWaveRepository(private val context: Context) {
     fun getTracksForPlaylist(playlistId: Long): Flow<List<Track>> = playlistDao.getTracksForPlaylist(playlistId)
 
     suspend fun scanMediaStore(): List<Track> = withContext(Dispatchers.IO) {
+        logger.info("library", "media_scan_started")
         val localList = mutableListOf<Track>()
         var queryCompleted = false
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
@@ -206,6 +209,7 @@ class FloWaveRepository(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
+            logger.error("library", "media_scan_failed", throwable = e)
             android.util.Log.e("FloWaveRepository", "Error scanning local MediaStore tracks", e)
         }
 
@@ -227,12 +231,14 @@ class FloWaveRepository(private val context: Context) {
                 trackDao.insertTracks(mergedLocalList)
             }
         }
+        logger.info("library", "media_scan_finished", context = mapOf("count" to localList.size))
         localList
     }
 
     /** Imports an audio document without copying it; the persisted SAF URI is the playback source. */
     suspend fun importAudioUri(uri: android.net.Uri, importedFolder: String? = null): Track? = withContext(Dispatchers.IO) {
         try {
+            logger.info("import", "file_import_started", context = mapOf("source" to "saf_file"))
             persistReadPermission(uri)
 
             val resolver = context.contentResolver
@@ -297,6 +303,7 @@ class FloWaveRepository(private val context: Context) {
                 retriever.release()
             }
         } catch (e: Exception) {
+            logger.warn("import", "file_import_failed", context = mapOf("source" to "saf_file"), throwable = e)
             android.util.Log.w("FloWaveRepository", "Could not import audio URI $uri", e)
             null
         }
@@ -308,6 +315,7 @@ class FloWaveRepository(private val context: Context) {
 
     /** Imports all supported audio descendants of a persisted SAF tree URI. */
     suspend fun importAudioTree(treeUri: android.net.Uri): List<Track> = withContext(Dispatchers.IO) {
+        logger.info("import", "folder_import_started", context = mapOf("source" to "saf_tree"))
         persistReadPermission(treeUri)
         val resolver = context.contentResolver
         val pending = ArrayDeque<Pair<android.net.Uri, String>>()
@@ -345,6 +353,7 @@ class FloWaveRepository(private val context: Context) {
             }.onFailure { android.util.Log.w("FloWaveRepository", "Could not enumerate SAF directory", it) }
         }
         files.distinctBy { it.first.toString() }.mapNotNull { (uri, folder) -> importAudioUri(uri, folder) }
+            .also { logger.info("import", "folder_import_finished", context = mapOf("count" to it.size)) }
     }
 
     private fun persistReadPermission(uri: android.net.Uri) {
@@ -364,6 +373,7 @@ class FloWaveRepository(private val context: Context) {
             }.getOrDefault(false)
         }
         removed.forEach { trackDao.deleteTrack(it) }
+        if (removed.isNotEmpty()) logger.warn("library", "stale_imports_removed", context = mapOf("count" to removed.size))
         removed.size
     }
 }

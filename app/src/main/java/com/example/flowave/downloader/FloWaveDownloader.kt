@@ -9,6 +9,7 @@ import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.Track
 import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.data.repository.FloWaveRepository
+import com.example.flowave.diagnostics.FloWaveLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
@@ -20,6 +21,7 @@ class FloWaveDownloader(
     private val context: Context,
     private val repository: FloWaveRepository
 ) {
+    private val logger = FloWaveLogger.getInstance(context)
     private val downloadDao = AppDatabase.getDatabase(context).downloadDao()
     private val innerTubeRepo = InnerTubeRepository.getInstance(context)
     private val sealEngine = SealStyleDownloadEngine()
@@ -35,6 +37,7 @@ class FloWaveDownloader(
      */
     @Suppress("UNUSED_PARAMETER")
     suspend fun downloadAudioTrack(track: InnerTubeTrack, streamUrl: String) = withContext(Dispatchers.IO) {
+        logger.info("download", "started", context = mapOf("videoId" to track.id))
         val sourceUrl = if (track.id.startsWith("http://") || track.id.startsWith("https://")) {
             track.id
         } else {
@@ -62,6 +65,7 @@ class FloWaveDownloader(
                     DownloadStatus.DOWNLOADING
                 )
                 is DownloadState.Success -> {
+                    logger.info("download", "engine_succeeded", context = mapOf("videoId" to track.id))
                     val file = File(state.outputFilePath)
                     if (file.isFile && file.length() > 0L) {
                         handleCompletedDownload(track, file, file.parentFile ?: outputDir)
@@ -88,6 +92,7 @@ class FloWaveDownloader(
                 android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
             )?.toLongOrNull() ?: 0L
         } catch (error: Exception) {
+            logger.warn("download", "metadata_failed", context = mapOf("source" to "downloaded_file"), throwable = error)
             android.util.Log.w(TAG, "Duration metadata unavailable for ${file.name}", error)
         } finally {
             runCatching { retriever.release() }
@@ -105,6 +110,7 @@ class FloWaveDownloader(
         }
 
         downloadDao.markCompleted(track.id, file.absolutePath, DownloadStatus.DONE, System.currentTimeMillis())
+        logger.info("download", "completed", context = mapOf("videoId" to track.id))
         repository.insertTrack(
             Track(
                 id = "dl_${track.id}",
@@ -123,6 +129,7 @@ class FloWaveDownloader(
     }
 
     suspend fun deleteDownload(id: String) = withContext(Dispatchers.IO) {
+        logger.info("download", "deleted", context = mapOf("downloadId" to id))
         downloadDao.deleteDownloadById(id)
     }
 

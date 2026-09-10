@@ -29,6 +29,7 @@ import com.example.flowave.data.model.UserProfile
 import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.data.repository.FloWaveRepository
 import com.example.flowave.data.repository.ProfileRepository
+import com.example.flowave.diagnostics.FloWaveLogger
 import com.example.flowave.downloader.FloWaveDownloader
 import com.example.flowave.downloader.FloWaveDownloadService
 import com.example.flowave.ui.components.DynamicIslandWidget
@@ -69,6 +70,7 @@ fun MainScreen() {
     val audioEngine = remember { FloWaveAudioEngine.getInstance(context) }
     val innerTubeRepo = remember { InnerTubeRepository.getInstance(context) }
     val downloader = remember { FloWaveDownloader(context, repository) }
+    val diagnostics = remember { FloWaveLogger.getInstance(context) }
 
     val localTracks by repository.allTracks.collectAsStateWithLifecycle(initialValue = emptyList())
     val offlineTracks = remember(localTracks) { localTracks.filterNot { it.isOnline } }
@@ -79,6 +81,7 @@ fun MainScreen() {
     val downloadEntries by downloader.allDownloadEntries.collectAsStateWithLifecycle(initialValue = emptyList())
     val userProfile by profileRepo.userProfile.collectAsStateWithLifecycle(initialValue = UserProfile())
     val settingsJson by profileRepo.settingsJson.collectAsStateWithLifecycle(initialValue = SettingsSchema.getDefaultJson())
+    val diagnosticEntries by diagnostics.entries.collectAsStateWithLifecycle(initialValue = emptyList())
 
     var featuredOnlineTracks by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var searchOnlineResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
@@ -97,8 +100,13 @@ fun MainScreen() {
     var activeTrackForStats by remember { mutableStateOf<Track?>(null) }
     var lastPositionMs by remember { mutableLongStateOf(0L) }
     var accumulatedTimeMs by remember { mutableLongStateOf(0L) }
+    var pendingDiagnosticExport by remember { mutableStateOf<String?>(null) }
 
     val playbackState by audioEngine.playbackState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(selectedTab) {
+        diagnostics.info("navigation", "tab_selected", context = mapOf("tab" to selectedTab))
+    }
 
     val importAudioLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -117,6 +125,26 @@ fun MainScreen() {
             coroutineScope.launch {
                 val imported = repository.importAudioTree(uri)
                 Toast.makeText(context, "Imported ${imported.size} audio file${if (imported.size == 1) "" else "s"} from folder", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    val diagnosticExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        val text = pendingDiagnosticExport
+        pendingDiagnosticExport = null
+        if (uri != null && text != null) {
+            coroutineScope.launch {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(text.toByteArray(Charsets.UTF_8))
+                    } ?: error("Unable to open export destination")
+                }.onSuccess {
+                    Toast.makeText(context, "Diagnostics exported", Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    Toast.makeText(context, "Diagnostics export failed", Toast.LENGTH_SHORT).show()
+                    diagnostics.warn("diagnostics", "export_failed", throwable = it)
+                }
             }
         }
     }
@@ -558,7 +586,17 @@ fun MainScreen() {
                         },
                         onImportSettings = { jsonStr ->
                             profileRepo.importSettings(jsonStr)
-                        }
+                        },
+                        diagnosticEntries = diagnosticEntries,
+                        onExportDiagnostics = {
+                            coroutineScope.launch {
+                                pendingDiagnosticExport = diagnostics.exportText()
+                                diagnosticExportLauncher.launch("flowave-diagnostics-${System.currentTimeMillis()}.txt")
+                            }
+                        },
+                        onClearUnsavedDiagnostics = { diagnostics.clearUnsaved() },
+                        onClearAllDiagnostics = { diagnostics.clearAll() },
+                        onProtectDiagnostic = { id, protect -> diagnostics.protect(id, protect) }
                     )
                 }
             }

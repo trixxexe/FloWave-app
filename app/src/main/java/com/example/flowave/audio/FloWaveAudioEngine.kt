@@ -25,6 +25,7 @@ import androidx.media3.session.MediaSession
 import com.example.flowave.data.model.Track
 import androidx.room.withTransaction
 import com.example.flowave.data.remote.InnerTubeRepository
+import com.example.flowave.diagnostics.FloWaveLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -79,6 +80,7 @@ data class EqualizerState(
 
 class FloWaveAudioEngine(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private val logger = FloWaveLogger.getInstance(context)
     private val innerTubeRepo = InnerTubeRepository.getInstance(context)
     private val db = com.example.flowave.data.local.AppDatabase.getDatabase(context)
     private val queueDao = db.queueDao()
@@ -137,6 +139,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     init {
+        logger.info("player", "engine_created")
         initPlayer()
         registerNetworkCallback()
         restoreQueueAndState()
@@ -224,7 +227,10 @@ class FloWaveAudioEngine(private val context: Context) {
             try {
                 val dbState = queueDao.getQueueState() ?: return@launch
                 val dbItems = queueDao.getQueueItems()
-                if (dbItems.isEmpty()) return@launch
+                if (dbItems.isEmpty()) {
+                    logger.debug("queue", "restore_empty")
+                    return@launch
+                }
                 
                 val tracks = dbItems.mapNotNull { item ->
                     trackDao.getTrackById(item.trackId)
@@ -253,9 +259,12 @@ class FloWaveAudioEngine(private val context: Context) {
                     }
                     if (tracks.size != dbItems.size || restoredIndex != dbState.currentQueueIndex) {
                         persistQueueAndState()
+                        logger.warn("queue", "restore_repaired", context = mapOf("stored" to dbItems.size, "restored" to tracks.size))
                     }
+                    logger.info("queue", "restored", context = mapOf("count" to tracks.size, "index" to restoredIndex))
                 }
             } catch (e: Exception) {
+                logger.error("queue", "restore_failed", throwable = e)
                 android.util.Log.e("FloWaveAudioEngine", "Failed to restore queue: ${e.message}")
             }
         }
@@ -292,6 +301,7 @@ class FloWaveAudioEngine(private val context: Context) {
             .build().apply {
                 val listener = object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        logger.debug("player", if (isPlaying) "playing" else "paused")
                         _playbackState.value = _playbackState.value.copy(isPlaying = isPlaying)
                         if (isPlaying) {
                             startProgressAndVisualizerLoop()
@@ -303,6 +313,7 @@ class FloWaveAudioEngine(private val context: Context) {
                     }
 
                     override fun onPlaybackStateChanged(state: Int) {
+                        logger.debug("player", "state_changed", context = mapOf("state" to state))
                         _playbackState.value = _playbackState.value.copy(
                             isBuffering = state == Player.STATE_BUFFERING,
                             errorMessage = if (state == Player.STATE_READY) null else _playbackState.value.errorMessage
@@ -335,6 +346,14 @@ class FloWaveAudioEngine(private val context: Context) {
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
+                        val failedTrack = _playbackState.value.currentTrack
+                        logger.error(
+                            "player",
+                            "media3_error",
+                            error.message.orEmpty(),
+                            mapOf("code" to error.errorCodeName, "online" to failedTrack?.isOnline, "trackId" to failedTrack?.id),
+                            error
+                        )
                         android.util.Log.e("FloWaveAudioEngine", "Player error encountered: ${error.message}", error)
                         _playbackState.value = _playbackState.value.copy(
                             isBuffering = false,
@@ -418,6 +437,11 @@ class FloWaveAudioEngine(private val context: Context) {
                     }
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        logger.info(
+                            "player",
+                            "track_transition",
+                            context = mapOf("reason" to reason, "index" to (exoPlayer?.currentMediaItemIndex ?: -1))
+                        )
                         trackRetryCount.clear()
                         val index = exoPlayer?.currentMediaItemIndex ?: -1
                         val queue = _playbackState.value.queue
@@ -570,6 +594,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun stopPlayback() {
+        logger.info("player", "stop_requested")
         onlineRecoveryJob?.cancel()
         onlineRecoveryJob = null
         trackRetryCount.clear()
@@ -614,6 +639,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun setQueueAndPlay(queue: List<Track>, startIndex: Int = 0) {
+        logger.info("queue", "set_queue", context = mapOf("count" to queue.size, "startIndex" to startIndex, "online" to queue.count { it.isOnline }))
         if (queue.isEmpty()) return
         val player = exoPlayer ?: return
 
@@ -657,10 +683,12 @@ class FloWaveAudioEngine(private val context: Context) {
 
     /** Starts an online result; the stream is resolved lazily by Media3. */
     suspend fun playOnlineTrack(track: com.example.flowave.data.model.InnerTubeTrack) {
+        logger.info("online", "play_requested", context = mapOf("videoId" to track.id))
         playTrack(innerTubeRepo.createOnlineTrack(track))
     }
 
     fun playTrack(track: Track) {
+        logger.info("player", "track_requested", context = mapOf("trackId" to track.id, "source" to track.source))
         val normalizedTrack = canonicalTrack(track)
         val currentQueue = _playbackState.value.queue.toMutableList()
         val index = currentQueue.indexOfFirst { it.id == normalizedTrack.id }
@@ -673,6 +701,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun togglePlayPause() {
+        logger.debug("player", "toggle_play_pause")
         val player = exoPlayer ?: return
         if (player.isPlaying) {
             player.pause()
@@ -682,6 +711,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun retryCurrentTrack() {
+        logger.info("player", "retry_requested", context = mapOf("trackId" to _playbackState.value.currentTrack?.id))
         val track = _playbackState.value.currentTrack ?: return
         val player = exoPlayer ?: return
         if (track.isOnline) {
@@ -703,6 +733,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun playNext() {
+        logger.info("queue", "next_requested")
         val player = exoPlayer ?: return
         if (player.hasNextMediaItem()) {
             player.seekToNextMediaItem()
@@ -718,6 +749,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun playPrevious() {
+        logger.info("queue", "previous_requested")
         val player = exoPlayer ?: return
         if (player.hasPreviousMediaItem()) {
             player.seekToPreviousMediaItem()
@@ -727,6 +759,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun seekTo(positionMs: Long) {
+        logger.debug("player", "seek", context = mapOf("positionMs" to positionMs))
         exoPlayer?.seekTo(positionMs)
         _playbackState.value = _playbackState.value.copy(currentPositionMs = positionMs)
     }
@@ -742,6 +775,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun toggleShuffle() {
+        logger.info("queue", "shuffle_toggled")
         val newShuffle = !_playbackState.value.isShuffleEnabled
         exoPlayer?.shuffleModeEnabled = newShuffle
         _playbackState.value = _playbackState.value.copy(isShuffleEnabled = newShuffle)
@@ -760,6 +794,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun toggleRepeatMode() {
+        logger.info("queue", "repeat_toggled")
         val nextMode = when (_playbackState.value.repeatMode) {
             Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
             Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
@@ -824,6 +859,7 @@ class FloWaveAudioEngine(private val context: Context) {
 
     // Queue controls
     fun reorderQueue(fromIndex: Int, toIndex: Int) {
+        logger.info("queue", "reordered", context = mapOf("from" to fromIndex, "to" to toIndex))
         val queue = _playbackState.value.queue.toMutableList()
         if (fromIndex in queue.indices && toIndex in queue.indices) {
             val moved = queue.removeAt(fromIndex)
@@ -848,6 +884,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun addToQueueNext(track: Track) {
+        logger.info("queue", "added_next", context = mapOf("trackId" to track.id, "source" to track.source))
         val queue = _playbackState.value.queue.toMutableList()
         val currentIdx = _playbackState.value.currentQueueIndex
         val insertIndex = if (currentIdx in queue.indices) currentIdx + 1 else queue.size
@@ -859,6 +896,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun addToQueueLast(track: Track) {
+        logger.info("queue", "added_last", context = mapOf("trackId" to track.id, "source" to track.source))
         val queue = _playbackState.value.queue.toMutableList()
         queue.add(canonicalTrack(track))
         _playbackState.value = _playbackState.value.copy(queue = queue)
@@ -867,6 +905,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun removeFromQueue(index: Int) {
+        logger.info("queue", "removed", context = mapOf("index" to index))
         val queue = _playbackState.value.queue.toMutableList()
         if (index in queue.indices) {
             queue.removeAt(index)
@@ -888,6 +927,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun clearQueue() {
+        logger.info("queue", "cleared")
         exoPlayer?.stop()
         exoPlayer?.clearMediaItems()
         _playbackState.value = PlaybackState()
@@ -1073,6 +1113,7 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun release() {
+        logger.info("lifecycle", "engine_released")
         onlineRecoveryJob?.cancel()
         onlineRecoveryJob = null
         trackRetryCount.clear()

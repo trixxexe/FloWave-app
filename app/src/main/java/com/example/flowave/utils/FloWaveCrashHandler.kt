@@ -9,6 +9,7 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.flowave.diagnostics.FloWaveLogger
 
 object FloWaveCrashHandler : Thread.UncaughtExceptionHandler {
 
@@ -25,6 +26,14 @@ object FloWaveCrashHandler : Thread.UncaughtExceptionHandler {
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
         try {
             saveCrashReport(throwable)
+            appContext?.let {
+                FloWaveLogger.getInstance(it).error(
+                    "crash",
+                    "uncaught_exception",
+                    context = mapOf("thread" to thread.name),
+                    throwable = throwable
+                )
+            }
         } catch (e: Exception) {
             Log.e("FloWaveCrashHandler", "Failed to save crash report", e)
         }

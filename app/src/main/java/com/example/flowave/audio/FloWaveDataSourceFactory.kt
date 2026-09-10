@@ -9,6 +9,7 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.TransferListener
 import com.example.flowave.data.remote.InnerTubeRepository
+import com.example.flowave.diagnostics.FloWaveLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -20,6 +21,7 @@ class FloWaveDataSourceFactory(
     private val cacheDataSourceFactory = FloWaveCacheManager.createCacheDataSourceFactory(context)
     private val defaultDataSourceFactory = DefaultDataSource.Factory(context)
     private val streamRepository = InnerTubeRepository.getInstance(context)
+    private val logger = FloWaveLogger.getInstance(context)
 
     override fun createDataSource(): DataSource {
         val cacheDataSource = cacheDataSourceFactory.createDataSource()
@@ -39,10 +41,15 @@ class FloWaveDataSourceFactory(
                     val videoId = dataSpec.uri.lastPathSegment
                         ?.takeIf { it.isNotBlank() }
                         ?: throw java.io.IOException("Missing online track identifier")
-                    val resolvedUrl = runBlocking(Dispatchers.IO) {
-                        withTimeout(45_000L) {
-                            streamRepository.getStreamUrl(videoId)
+                    val resolvedUrl = try {
+                        runBlocking(Dispatchers.IO) {
+                            withTimeout(45_000L) {
+                                streamRepository.getStreamUrl(videoId)
+                            }
                         }
+                    } catch (error: Exception) {
+                        logger.error("online", "data_source_resolution_failed", context = mapOf("videoId" to videoId), throwable = error)
+                        throw error
                     }
                     if (resolvedUrl.isBlank() || !resolvedUrl.startsWith("http")) {
                         throw java.io.IOException("Online stream resolver returned an invalid URL")

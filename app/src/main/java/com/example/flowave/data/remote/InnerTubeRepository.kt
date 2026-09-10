@@ -7,6 +7,7 @@ import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.Track
 import com.example.flowave.data.model.LrcLine
 import com.example.flowave.utils.FloWaveConstants
+import com.example.flowave.diagnostics.FloWaveLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
@@ -77,6 +78,7 @@ object InnerTubeClients {
 
 class InnerTubeRepository(context: Context? = null) {
     private val appContext = context?.applicationContext
+    private val logger = appContext?.let { FloWaveLogger.getInstance(it) }
     private val localStreamResolver = appContext?.let { SealStyleDownloadEngine() }
     private val client = OkHttpClient.Builder()
         .connectTimeout(FloWaveConstants.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -98,6 +100,7 @@ class InnerTubeRepository(context: Context? = null) {
 
     fun invalidateStreamUrl(videoId: String) {
         streamUrlCache.remove(videoId)
+        logger?.debug("online", "stream_cache_invalidated", context = mapOf("videoId" to videoId))
     }
 
     fun parseDurationText(text: String): Long {
@@ -455,8 +458,15 @@ class InnerTubeRepository(context: Context? = null) {
     }
 
     suspend fun getStreamUrl(videoId: String, forceRefresh: Boolean = false): String {
+        logger?.info("online", "stream_resolution_started", context = mapOf("videoId" to videoId, "forceRefresh" to forceRefresh))
         val lock = streamResolutionLocks.computeIfAbsent(videoId) { Mutex() }
-        return lock.withLock { getStreamUrlInternal(videoId, forceRefresh) }
+        return try {
+            lock.withLock { getStreamUrlInternal(videoId, forceRefresh) }
+                .also { logger?.info("online", "stream_resolution_succeeded", context = mapOf("videoId" to videoId)) }
+        } catch (error: Exception) {
+            logger?.error("online", "stream_resolution_failed", error.message.orEmpty(), mapOf("videoId" to videoId), error)
+            throw error
+        }
     }
 
     private suspend fun getStreamUrlInternal(videoId: String, forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
@@ -494,7 +504,10 @@ class InnerTubeRepository(context: Context? = null) {
         // devices where the optional runtime could not initialize.
         if (FloWaveRuntime.ready) {
             streamUrlCache[videoId]?.second?.let { cachedUrl ->
-                if (!isStreamUrlExpired(cachedUrl)) return@withContext cachedUrl
+                if (!isStreamUrlExpired(cachedUrl)) {
+                    logger?.debug("online", "resolver_cache_hit", context = mapOf("videoId" to videoId))
+                    return@withContext cachedUrl
+                }
             }
         }
         localStreamResolver?.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")
@@ -568,6 +581,8 @@ class InnerTubeRepository(context: Context? = null) {
                         if (adaptiveFormats != null) {
                             val extractedUrl = parseAudioUrl(adaptiveFormats)
                             if (extractedUrl != null) {
+                                logger?.info("online", "inner_tube_client_succeeded", context = mapOf("videoId" to videoId, "client" to clientConfig.clientName))
+                                android.util.Log.d("FloWaveInnerTube", "Stream served by InnerTube client: ${clientConfig.clientName}")
                                 android.util.Log.d("FloWaveInnerTube", "Stream served by InnerTube client: ${clientConfig.clientName}")
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
                                 val videoDetails = json.optJSONObject("videoDetails")
@@ -582,6 +597,8 @@ class InnerTubeRepository(context: Context? = null) {
                     }
                 }
             } catch (e: Exception) {
+                logger?.warn("online", "inner_tube_client_failed", context = mapOf("videoId" to videoId, "client" to clientConfig.clientName), throwable = e)
+                android.util.Log.w("FloWaveInnerTube", "InnerTube client ${clientConfig.clientName} failed for ${videoId}: ${e.message}", e)
                 android.util.Log.w("FloWaveInnerTube", "InnerTube client ${clientConfig.clientName} failed for $videoId: ${e.message}", e)
             }
         }
@@ -611,6 +628,8 @@ class InnerTubeRepository(context: Context? = null) {
                                 }
                             }
                             if (bestPipedUrl != null) {
+                                logger?.info("online", "piped_fallback_succeeded", context = mapOf("videoId" to videoId))
+                                android.util.Log.d("FloWaveInnerTube", "Stream served by Piped instance: ${instance}")
                                 android.util.Log.d("FloWaveInnerTube", "Stream served by Piped instance: $instance")
                                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), bestPipedUrl)
                                 return@withContext bestPipedUrl
@@ -619,6 +638,8 @@ class InnerTubeRepository(context: Context? = null) {
                     }
                 }
             } catch (e: Exception) {
+                logger?.warn("online", "piped_fallback_failed", context = mapOf("videoId" to videoId), throwable = e)
+                android.util.Log.w("FloWaveInnerTube", "Piped extraction failed for ${instance}: ${e.message}", e)
                 android.util.Log.w("FloWaveInnerTube", "Piped extraction failed for $instance: ${e.message}", e)
             }
         }
@@ -639,12 +660,16 @@ class InnerTubeRepository(context: Context? = null) {
                     .build()
                 fastClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful || response.code in 300..399) {
+                        logger?.info("online", "invidious_fallback_succeeded", context = mapOf("videoId" to videoId))
+                        android.util.Log.d("FloWaveInnerTube", "Stream served by Invidious instance: ${baseUrl}")
                         android.util.Log.d("FloWaveInnerTube", "Stream served by Invidious instance: $baseUrl")
                         streamUrlCache[videoId] = Pair(System.currentTimeMillis(), testUrl)
                         return@withContext testUrl
                     }
                 }
             } catch (e: Exception) {
+                logger?.warn("online", "invidious_fallback_failed", context = mapOf("videoId" to videoId), throwable = e)
+                android.util.Log.w("FloWaveInnerTube", "Invidious extraction failed for ${searchInstance}: ${e.message}")
                 android.util.Log.w("FloWaveInnerTube", "Invidious extraction failed for $searchInstance: ${e.message}")
             }
         }

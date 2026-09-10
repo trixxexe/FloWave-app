@@ -5,11 +5,13 @@ import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.example.flowave.diagnostics.FloWaveLogger
 
 @OptIn(UnstableApi::class)
 class FloWaveMediaService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
+    private val logger by lazy { FloWaveLogger.getInstance(this) }
 
     private fun initializeMediaSession() {
         if (mediaSession != null) return
@@ -31,20 +33,22 @@ class FloWaveMediaService : MediaSessionService() {
                         }
                     })
                     .build()
-                android.util.Log.d("FloWaveMediaService", "MediaSession successfully initialized.")
+                logger.info("media_service", "session_initialized")
             }
         } catch (e: Exception) {
-            android.util.Log.e("FloWaveMediaService", "Error initializing MediaSession", e)
+            logger.error("media_service", "session_initialization_failed", throwable = e)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        logger.info("lifecycle", "media_service_created")
         initializeMediaSession()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        logger.debug("media_service", "start_command", context = mapOf("startId" to startId))
         return START_STICKY
     }
 
@@ -62,8 +66,9 @@ class FloWaveMediaService : MediaSessionService() {
             }
             mediaSession = null
         } catch (e: Exception) {
-            android.util.Log.e("FloWaveMediaService", "Error releasing MediaSession in onDestroy", e)
+            logger.error("media_service", "session_release_failed", throwable = e)
         }
+        logger.info("lifecycle", "media_service_destroyed")
         super.onDestroy()
     }
 }
