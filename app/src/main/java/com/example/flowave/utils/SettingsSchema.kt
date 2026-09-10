@@ -27,37 +27,6 @@ data class SettingDefinition(
 
 object SettingsSchema {
     val DEFINITIONS = listOf(
-        // Audio
-        SettingDefinition(
-            key = "audio_normalization",
-            type = SettingType.BOOLEAN,
-            defaultValue = "true",
-            category = "Audio",
-            label = "Audio Normalization",
-            description = "Maintains consistent loudness levels across all tracks."
-        ),
-        SettingDefinition(
-            key = "gapless_playback",
-            type = SettingType.BOOLEAN,
-            defaultValue = "true",
-            category = "Audio",
-            label = "Gapless Playback",
-            description = "Eliminates silence between consecutive tracks."
-        ),
-        SettingDefinition(
-            key = "preferred_quality",
-            type = SettingType.CHOICE,
-            defaultValue = "Ultra FLAC (24-bit)",
-            category = "Audio",
-            label = "Default Audio Quality",
-            description = "Preferred streaming and download bitrate.",
-            choices = listOf(
-                ChoiceOption("Standard (128kbps)", "Standard (128kbps)"),
-                ChoiceOption("High (320kbps)", "High (320kbps)"),
-                ChoiceOption("Ultra FLAC (24-bit)", "Ultra FLAC (24-bit)")
-            )
-        ),
-        
         // Appearance
         SettingDefinition(
             key = "list_density",
