@@ -137,7 +137,9 @@ object SettingsSchema {
                 else -> json.put(def.key, def.defaultValue)
             }
         }
-        return json.toString(4)
+        // The one-argument form is also available in the plain JVM test runtime;
+        // Android's pretty-print overload is not implemented by some stubs.
+        return json.toString()
     }
 
     fun getValue(jsonStr: String, key: String): String {
@@ -157,6 +159,6 @@ object SettingsSchema {
     fun updateValue(jsonStr: String, key: String, value: Any): String {
         val json = try { JSONObject(jsonStr) } catch (e: Exception) { JSONObject() }
         json.put(key, value)
-        return json.toString(4)
+        return json.toString()
     }
 }
