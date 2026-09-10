@@ -11,10 +11,14 @@ import com.example.flowave.data.model.PlaylistTrackCrossRef
 import com.example.flowave.data.model.Track
 import com.example.flowave.diagnostics.FloWaveLogger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicLong
 
 class FloWaveRepository(private val context: Context) {
     private val logger = FloWaveLogger.getInstance(context)
@@ -92,7 +96,28 @@ class FloWaveRepository(private val context: Context) {
     fun getTracksForPlaylist(playlistId: Long): Flow<List<Track>> = playlistDao.getTracksForPlaylist(playlistId)
 
     suspend fun scanMediaStore(): List<Track> = withContext(Dispatchers.IO) {
-        logger.info("library", "media_scan_started")
+        scanMutex.withLock {
+            val now = System.currentTimeMillis()
+            if (now - lastScanCompletedAt < SCAN_COALESCE_WINDOW_MS) {
+                logger.debug("library", "media_scan_coalesced", context = mapOf(
+                    "requestId" to scanRequestIds.incrementAndGet(),
+                    "generation" to lastScanGeneration,
+                    "count" to lastScanResult.size
+                ))
+                return@withLock lastScanResult
+            }
+            val requestId = scanRequestIds.incrementAndGet()
+            val generation = requestId
+            logger.info("library", "media_scan_started", context = mapOf("requestId" to requestId, "generation" to generation))
+            val result = performMediaStoreScan(requestId, generation)
+            lastScanResult = result
+            lastScanCompletedAt = System.currentTimeMillis()
+            lastScanGeneration = generation
+            result
+        }
+    }
+
+    private suspend fun performMediaStoreScan(requestId: Long, generation: Long): List<Track> {
         val localList = mutableListOf<Track>()
         var queryCompleted = false
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
@@ -169,8 +194,10 @@ class FloWaveRepository(private val context: Context) {
                             if (metaDuration != null && metaDuration > 0L) {
                                 duration = metaDuration
                             }
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
-                            android.util.Log.e("FloWaveRepository", "MediaMetadataRetriever extraction failed: ${e.message}")
+                            logger.warn("library", "metadata_extraction_failed", context = mapOf("source" to "mediastore"), throwable = e)
                         } finally {
                             try {
                                 retriever.release()
@@ -208,6 +235,9 @@ class FloWaveRepository(private val context: Context) {
                     localList.add(track)
                 }
             }
+        } catch (e: CancellationException) {
+            logger.debug("library", "media_scan_cancelled", context = mapOf("requestId" to requestId, "generation" to generation))
+            throw e
         } catch (e: Exception) {
             logger.error("library", "media_scan_failed", throwable = e)
             android.util.Log.e("FloWaveRepository", "Error scanning local MediaStore tracks", e)
@@ -231,7 +261,12 @@ class FloWaveRepository(private val context: Context) {
                 trackDao.insertTracks(mergedLocalList)
             }
         }
-        logger.info("library", "media_scan_finished", context = mapOf("count" to localList.size))
+        logger.info("library", "media_scan_finished", context = mapOf(
+            "requestId" to requestId,
+            "generation" to generation,
+            "count" to localList.size,
+            "queryCompleted" to queryCompleted
+        ))
         localList
     }
 
@@ -375,5 +410,14 @@ class FloWaveRepository(private val context: Context) {
         removed.forEach { trackDao.deleteTrack(it) }
         if (removed.isNotEmpty()) logger.warn("library", "stale_imports_removed", context = mapOf("count" to removed.size))
         removed.size
+    }
+
+    companion object {
+        private const val SCAN_COALESCE_WINDOW_MS = 1_500L
+        private val scanMutex = Mutex()
+        private val scanRequestIds = AtomicLong(0L)
+        @Volatile private var lastScanCompletedAt: Long = 0L
+        @Volatile private var lastScanGeneration: Long = 0L
+        @Volatile private var lastScanResult: List<Track> = emptyList()
     }
 }

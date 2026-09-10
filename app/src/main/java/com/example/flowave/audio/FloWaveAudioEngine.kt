@@ -71,7 +71,6 @@ data class EqualizerState(
     val virtualizerStrength: Short = 0,
     val loudnessEnhancerGainDb: Float = 0f,
     val preampDb: Float = 0f,
-    val stereoBalance: Float = 0f, // -1f (Left) to +1f (Right)
     val presetReverbName: String = "None",
     val presetReverb: Short = PresetReverb.PRESET_NONE,
     val isMono: Boolean = false,
@@ -87,7 +86,6 @@ class FloWaveAudioEngine(private val context: Context) {
     private val trackDao = db.trackDao()
     private val persistenceMutex = Mutex()
 
-    private val panningAudioProcessor = PanningAudioProcessor()
     private var mediaController: androidx.media3.session.MediaController? = null
 
     private var exoPlayer: ExoPlayer? = null
@@ -128,6 +126,10 @@ class FloWaveAudioEngine(private val context: Context) {
             cause = cause.cause
         }
         return null
+    }
+
+    private fun isCancellationError(error: Throwable): Boolean {
+        return OnlinePlaybackPolicy.isCancellation(error)
     }
 
     private fun updatePlaybackState(block: (PlaybackState) -> PlaybackState) {
@@ -283,24 +285,21 @@ class FloWaveAudioEngine(private val context: Context) {
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
             .setDataSourceFactory(customDataSourceFactory)
 
-        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
-            override fun buildAudioSink(
-                context: android.content.Context,
-                enableFloatOutput: Boolean,
-                enableAudioTrackPlaybackParams: Boolean
-            ): androidx.media3.exoplayer.audio.AudioSink? {
-                return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
-                    .setAudioProcessors(arrayOf(panningAudioProcessor))
-                    .build()
-            }
-        }
-
-        exoPlayer = ExoPlayer.Builder(context, renderersFactory)
+        // Keep Media3's default AudioSink/Sonic lifecycle. A custom processor
+        // could retain stale buffers across seek/prepare and crash inside
+        // Sonic when speed changed during playback on some devices.
+        exoPlayer = ExoPlayer.Builder(context)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setMediaSourceFactory(mediaSourceFactory)
             .setLooper(android.os.Looper.getMainLooper())
             .build().apply {
+                logger.info("player", "audio_pipeline_configured", context = mapOf(
+                    "audioSink" to "media3_default",
+                    "customPcmProcessor" to false,
+                    "speedRange" to "0.5..2.5",
+                    "pitchRange" to "0.5..2.0"
+                ))
                 val listener = object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         logger.debug("player", if (isPlaying) "playing" else "paused")
@@ -349,13 +348,30 @@ class FloWaveAudioEngine(private val context: Context) {
 
                     override fun onPlayerError(error: PlaybackException) {
                         val failedTrack = _playbackState.value.currentTrack
+                        val cancelled = isCancellationError(error)
                         logger.error(
                             "player",
                             "media3_error",
                             error.message.orEmpty(),
-                            mapOf("code" to error.errorCodeName, "online" to failedTrack?.isOnline, "trackId" to failedTrack?.id),
+                            mapOf(
+                                "code" to error.errorCodeName,
+                                "online" to failedTrack?.isOnline,
+                                "source" to failedTrack?.source,
+                                "trackId" to failedTrack?.id,
+                                "cancelled" to cancelled,
+                                "failureClass" to OnlinePlaybackPolicy.classifyResolverFailure(error),
+                                "speed" to _playbackState.value.playbackSpeed,
+                                "pitch" to _playbackState.value.pitch
+                            ),
                             error
                         )
+                        if (cancelled) {
+                            logger.debug("player", "media3_error_cancelled", context = mapOf(
+                                "source" to failedTrack?.source,
+                                "reason" to "data_source_interrupted"
+                            ))
+                            return
+                        }
                         android.util.Log.e("FloWaveAudioEngine", "Player error encountered: ${error.message}", error)
                         _playbackState.value = _playbackState.value.copy(
                             isBuffering = false,
@@ -431,9 +447,18 @@ class FloWaveAudioEngine(private val context: Context) {
                             }
                         } else {
                             // Local track error or fallback: skip to next
+                            val failedTrackId = failedTrack?.id
                             scope.launch {
                                 delay(500)
-                                playNext()
+                                if (failedTrackId != null &&
+                                    _playbackState.value.currentTrack?.id == failedTrackId &&
+                                    _playbackState.value.currentTrack?.isOnline == false
+                                ) {
+                                    logger.debug("player", "local_error_skip", context = mapOf("trackId" to failedTrackId))
+                                    playNext()
+                                } else {
+                                    logger.debug("player", "local_error_skip_cancelled", context = mapOf("trackId" to failedTrackId))
+                                }
                             }
                         }
                     }
@@ -442,7 +467,12 @@ class FloWaveAudioEngine(private val context: Context) {
                         logger.info(
                             "player",
                             "track_transition",
-                            context = mapOf("reason" to reason, "index" to (exoPlayer?.currentMediaItemIndex ?: -1))
+                            context = mapOf(
+                                "reason" to reason,
+                                "index" to (exoPlayer?.currentMediaItemIndex ?: -1),
+                                "source" to _playbackState.value.queue.getOrNull(exoPlayer?.currentMediaItemIndex ?: -1)?.source,
+                                "online" to _playbackState.value.queue.getOrNull(exoPlayer?.currentMediaItemIndex ?: -1)?.isOnline
+                            )
                         )
                         trackRetryCount.clear()
                         val index = exoPlayer?.currentMediaItemIndex ?: -1
@@ -641,7 +671,17 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun setQueueAndPlay(queue: List<Track>, startIndex: Int = 0) {
-        logger.info("queue", "set_queue", context = mapOf("count" to queue.size, "startIndex" to startIndex, "online" to queue.count { it.isOnline }))
+        logger.info("queue", "set_queue", context = mapOf(
+            "count" to queue.size,
+            "startIndex" to startIndex,
+            "onlineCount" to queue.count { it.isOnline },
+            "localCount" to queue.count { !it.isOnline },
+            "selectedTrackId" to queue.getOrNull(startIndex)?.id,
+            "selectedSource" to queue.getOrNull(startIndex)?.source,
+            "selectedOnline" to queue.getOrNull(startIndex)?.isOnline,
+            "onlineIds" to queue.filter { it.isOnline }.take(6).mapNotNull { PlaybackIdentity.sourceId(it) },
+            "localIds" to queue.filterNot { it.isOnline }.take(6).map { it.id }
+        ))
         if (queue.isEmpty()) return
         val player = exoPlayer ?: return
 
@@ -654,6 +694,19 @@ class FloWaveAudioEngine(private val context: Context) {
         val effectiveIndex = playableEntries.indexOfFirst { it.first.id == requestedTrack?.id }
             .takeIf { it >= 0 } ?: 0
         val playableQueue = playableEntries.map { it.first }
+
+        val sameQueue = _playbackState.value.queue.map { it.id } == playableQueue.map { it.id }
+        if (sameQueue && _playbackState.value.currentQueueIndex == effectiveIndex &&
+            player.currentMediaItem?.mediaId == playableQueue.getOrNull(effectiveIndex)?.id
+        ) {
+            logger.debug("queue", "set_queue_idempotent", context = mapOf(
+                "index" to effectiveIndex,
+                "source" to playableQueue.getOrNull(effectiveIndex)?.source,
+                "online" to playableQueue.getOrNull(effectiveIndex)?.isOnline
+            ))
+            player.play()
+            return
+        }
 
         _playbackState.value = _playbackState.value.copy(
             queue = playableQueue,
@@ -695,6 +748,15 @@ class FloWaveAudioEngine(private val context: Context) {
         val currentQueue = _playbackState.value.queue.toMutableList()
         val index = currentQueue.indexOfFirst { it.id == normalizedTrack.id }
         if (index >= 0) {
+            if (index == _playbackState.value.currentQueueIndex && _playbackState.value.currentTrack?.id == normalizedTrack.id) {
+                logger.debug("player", "track_selection_idempotent", context = mapOf(
+                    "trackId" to normalizedTrack.id,
+                    "source" to normalizedTrack.source,
+                    "online" to normalizedTrack.isOnline
+                ))
+                exoPlayer?.play()
+                return
+            }
             setQueueAndPlay(currentQueue, index)
         } else {
             currentQueue.add(0, normalizedTrack)
@@ -767,13 +829,19 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     fun setPlaybackSpeed(speed: Float) {
-        exoPlayer?.playbackParameters = PlaybackParameters(speed, _playbackState.value.pitch)
-        _playbackState.value = _playbackState.value.copy(playbackSpeed = speed)
+        val safeSpeed = speed.coerceIn(0.5f, 2.5f)
+        if (safeSpeed == _playbackState.value.playbackSpeed) return
+        logger.info("player", "speed_changed", context = mapOf("speed" to safeSpeed, "source" to _playbackState.value.currentTrack?.source))
+        exoPlayer?.playbackParameters = PlaybackParameters(safeSpeed, _playbackState.value.pitch)
+        _playbackState.value = _playbackState.value.copy(playbackSpeed = safeSpeed)
     }
 
     fun setPitch(pitch: Float) {
-        exoPlayer?.playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed, pitch)
-        _playbackState.value = _playbackState.value.copy(pitch = pitch)
+        val safePitch = pitch.coerceIn(0.5f, 2.0f)
+        if (safePitch == _playbackState.value.pitch) return
+        logger.info("player", "pitch_changed", context = mapOf("pitch" to safePitch, "source" to _playbackState.value.currentTrack?.source))
+        exoPlayer?.playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed, safePitch)
+        _playbackState.value = _playbackState.value.copy(pitch = safePitch)
     }
 
     fun toggleShuffle() {
@@ -991,12 +1059,6 @@ class FloWaveAudioEngine(private val context: Context) {
     fun setPreampDb(db: Float) {
         _equalizerState.value = _equalizerState.value.copy(preampDb = db)
         setLoudnessEnhancerGain((db * 100).toInt())
-    }
-
-    fun setStereoBalance(balance: Float) {
-        _equalizerState.value = _equalizerState.value.copy(stereoBalance = balance)
-        panningAudioProcessor.setBalance(balance)
-        exoPlayer?.volume = 1f
     }
 
     fun setPresetReverbName(name: String, preset: Short) {

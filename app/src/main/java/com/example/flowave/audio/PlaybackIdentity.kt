@@ -1,6 +1,10 @@
 package com.example.flowave.audio
 
 import com.example.flowave.data.model.Track
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 
 /** Stable identity rules shared by UI, persistence and the Media3 data source. */
 object PlaybackIdentity {
@@ -35,4 +39,28 @@ object OnlinePlaybackPolicy {
     fun isRefreshableHttpStatus(status: Int?): Boolean = status == null || status in setOf(
         403, 404, 410, 416, 429, 500, 502, 503, 504
     )
+
+    fun isCancellation(error: Throwable): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is kotlinx.coroutines.CancellationException || cause is InterruptedException) return true
+            cause = cause.cause
+        }
+        return false
+    }
+
+    fun classifyResolverFailure(error: Throwable): String {
+        var cause: Throwable? = error
+        while (cause != null) {
+            when (cause) {
+                is kotlinx.coroutines.CancellationException, is InterruptedException -> return "cancelled"
+                is UnknownHostException -> return "dns_unavailable"
+                is SSLException -> return "tls_failure"
+                is SocketTimeoutException -> return "timeout"
+                is ConnectException -> return "connection_refused"
+            }
+            cause = cause.cause
+        }
+        return "resolver_error"
+    }
 }

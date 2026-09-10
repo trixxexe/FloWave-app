@@ -178,30 +178,6 @@ fun EqualizerScreen(
                     )
                 }
 
-                // Stereo Balance
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Stereo Balance", color = TextSecondary, fontSize = 14.sp)
-                        Text(
-                            text = when {
-                                eqState.stereoBalance < -0.1f -> "Left (${"%.1f".format(-eqState.stereoBalance)})"
-                                eqState.stereoBalance > 0.1f -> "Right (${"%.1f".format(eqState.stereoBalance)})"
-                                else -> "Center"
-                            },
-                            color = CyanNeon, fontSize = 14.sp, fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Slider(
-                        value = eqState.stereoBalance,
-                        onValueChange = { audioEngine.setStereoBalance(it) },
-                        valueRange = -1f..1f,
-                        colors = SliderDefaults.colors(thumbColor = CyanNeon, activeTrackColor = CyanNeon)
-                    )
-                }
-
                 // Reverb Presets
                 Column {
                     Text("Acoustic Reverb Engine", color = TextSecondary, fontSize = 14.sp)

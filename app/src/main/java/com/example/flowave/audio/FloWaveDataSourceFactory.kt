@@ -47,6 +47,19 @@ class FloWaveDataSourceFactory(
                                 streamRepository.getStreamUrl(videoId)
                             }
                         }
+                    } catch (cancelled: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        logger.debug("online", "resolution_cancelled", context = mapOf(
+                            "videoId" to videoId,
+                            "reason" to "media3_data_source_interrupted"
+                        ))
+                        throw java.io.IOException("Online stream resolution cancelled", cancelled)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        logger.debug("online", "resolution_cancelled", context = mapOf(
+                            "videoId" to videoId,
+                            "reason" to "coroutine_cancelled"
+                        ))
+                        throw java.io.IOException("Online stream resolution cancelled", cancelled)
                     } catch (error: Exception) {
                         logger.error("online", "data_source_resolution_failed", context = mapOf("videoId" to videoId), throwable = error)
                         throw error
