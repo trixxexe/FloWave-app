@@ -68,7 +68,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
                 "resultCount" to results.size,
                 "durationMs" to elapsedMs(startedAt)
             ))
-            results
+            Result.success(results)
         } catch (error: TimeoutCancellationException) {
             logger?.error("downloader", "inspect_failed", context = mapOf(
                 "operation" to operation,
