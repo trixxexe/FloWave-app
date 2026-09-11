@@ -44,7 +44,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
                 "operation" to operation,
                 "durationMs" to elapsedMs(startedAt)
             ), throwable = error)
-            return@withContext Result.failure(error)
+            return@withContext Result.failure<List<DownloadMediaInfo>>(error)
         }
         try {
             val request = YoutubeDLRequest(DownloadInput.sourceFor(input)).apply {
@@ -75,7 +75,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
                 "failureClass" to "timeout",
                 "durationMs" to elapsedMs(startedAt)
             ), throwable = error)
-            Result.failure(IllegalStateException("yt-dlp inspection timed out", error))
+            Result.failure<List<DownloadMediaInfo>>(IllegalStateException("yt-dlp inspection timed out", error))
         } catch (error: CancellationException) {
             logger?.debug("downloader", "inspect_cancelled", context = mapOf("operation" to operation))
             throw error
@@ -85,7 +85,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
                 "failureClass" to error::class.simpleName.orEmpty(),
                 "durationMs" to elapsedMs(startedAt)
             ), throwable = error)
-            Result.failure(error)
+            Result.failure<List<DownloadMediaInfo>>(error)
         }
     }
 
