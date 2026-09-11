@@ -84,7 +84,7 @@ object InnerTubeClients {
     val FALLBACK_CHAIN = listOf(ANDROID_EMBEDDED, ANDROID_TESTSUITE, ANDROID_VR, TVHTML5_SIMPLY_EMBEDDED, WEB_EMBEDDED, ANDROID_MUSIC, WEB_REMIX, WEB)
 }
 
-class InnerTubeRepository(context: Context? = null) {
+open class InnerTubeRepository(context: Context? = null) {
     private val appContext = context?.applicationContext
     private val logger = appContext?.let { FloWaveLogger.getInstance(it) }
     private val localStreamResolver = appContext?.let { SealStyleDownloadEngine(it) }
@@ -126,7 +126,7 @@ class InnerTubeRepository(context: Context? = null) {
         logger?.debug("online", "stream_cache_invalidated", context = mapOf("videoId" to videoId))
     }
 
-    suspend fun getStreamResolution(videoId: String, forceRefresh: Boolean = false): ResolvedStreamSource {
+    open suspend fun getStreamResolution(videoId: String, forceRefresh: Boolean = false): ResolvedStreamSource {
         val url = getStreamUrl(videoId, forceRefresh)
         val candidate = selectedFallbackSources[videoId]
         return ResolvedStreamSource(
@@ -173,6 +173,7 @@ class InnerTubeRepository(context: Context? = null) {
         return listOfNotNull(preferred) + fallbackPool.ranked(type, nowMs).filter { it.key != preferred?.key }
     }
 
+    /** Parses a duration string (e.g., "3:45", "1:02:30", or "45") into milliseconds. */
     fun parseDurationText(text: String): Long {
         val parts = text.split(":")
         var seconds = 0L

@@ -81,7 +81,7 @@ class FloWaveDownloader(
 
     private suspend fun importCompletedFile(info: DownloadMediaInfo, id: String, file: File) {
         val retriever = android.media.MediaMetadataRetriever()
-        val durationMs = try {
+        var durationMs = try {
             retriever.setDataSource(file.absolutePath)
             retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
@@ -90,6 +90,9 @@ class FloWaveDownloader(
             0L
         } finally {
             runCatching { retriever.release() }
+        }
+        if (durationMs <= 0L && file.length() > 0L) {
+            durationMs = (info.durationSeconds ?: 0L) * 1000L
         }
         repository.insertTrack(
             Track(
@@ -108,6 +111,8 @@ class FloWaveDownloader(
     }
 
     suspend fun startDownload(track: InnerTubeTrack) {
+        val parsedMs = innerTubeRepo.parseDurationText(track.durationText)
+        val durationSeconds = (parsedMs / 1000L).takeIf { it > 0L }
         val result = download(
             DownloadMediaInfo(
                 id = track.id,
@@ -116,7 +121,7 @@ class FloWaveDownloader(
                 title = track.title,
                 creator = track.artist,
                 thumbnailUrl = track.thumbnailUrl,
-                durationSeconds = null
+                durationSeconds = durationSeconds
             )
         )
         result.getOrThrow()
@@ -198,7 +203,7 @@ class FloWaveDownloader(
         // non-empty post-processed file and use the source duration as a safe
         // fallback instead of deleting a playable download.
         if (durationMs <= 0L && file.length() > 0L) {
-            durationMs = innerTubeRepo.parseDurationText(track.durationText).coerceAtLeast(1L) * 1000L
+            durationMs = innerTubeRepo.parseDurationText(track.durationText).coerceAtLeast(1000L)
         }
         if (durationMs <= 0L) {
             downloadDao.markFailed(track.id, "Invalid downloaded audio file", DownloadStatus.FAILED)

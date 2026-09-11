@@ -10,19 +10,30 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import com.example.flowave.data.remote.InnerTubeRepository
+import com.example.flowave.data.remote.ResolvedStreamSource
 import com.example.flowave.diagnostics.FloWaveLogger
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import java.io.IOException
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 @UnstableApi
 class FloWaveDataSourceFactory(
-    private val context: Context
+    private val context: Context,
+    private val streamRepository: InnerTubeRepository = InnerTubeRepository.getInstance(context)
 ) : DataSource.Factory {
     private val cacheDataSourceFactory = FloWaveCacheManager.createCacheDataSourceFactory(context)
     private val defaultDataSourceFactory = DefaultDataSource.Factory(context)
-    private val streamRepository = InnerTubeRepository.getInstance(context)
     private val logger = FloWaveLogger.getInstance(context)
+    private val resolutionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun createDataSource(): DataSource {
         val cacheDataSource = cacheDataSourceFactory.createDataSource()
@@ -30,6 +41,8 @@ class FloWaveDataSourceFactory(
         
         return object : DataSource {
             private var activeDataSource: DataSource? = null
+            @Volatile private var activeJob: Job? = null
+            @Volatile private var activeFuture: CompletableFuture<ResolvedStreamSource>? = null
 
             override fun addTransferListener(transferListener: TransferListener) {
                 cacheDataSource.addTransferListener(transferListener)
@@ -42,29 +55,63 @@ class FloWaveDataSourceFactory(
                     val videoId = dataSpec.uri.lastPathSegment
                         ?.takeIf { it.isNotBlank() }
                         ?: throw java.io.IOException("Missing online track identifier")
-                    val resolution = try {
-                        runBlocking(Dispatchers.IO) {
-                            withTimeout(45_000L) {
+
+                    val future = CompletableFuture<ResolvedStreamSource>()
+                    val job = resolutionScope.launch {
+                        try {
+                            val resolved = withTimeout(45_000L) {
                                 streamRepository.getStreamResolution(videoId)
                             }
+                            future.complete(resolved)
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            future.completeExceptionally(cancelled)
+                        } catch (error: Throwable) {
+                            future.completeExceptionally(error)
                         }
-                    } catch (cancelled: InterruptedException) {
+                    }
+                    activeJob = job
+                    activeFuture = future
+
+                    val resolution = try {
+                        future.get(45_000L, TimeUnit.MILLISECONDS)
+                    } catch (interrupted: InterruptedException) {
+                        job.cancel()
+                        future.cancel(true)
                         Thread.currentThread().interrupt()
                         logger.debug("online", "resolution_cancelled", context = mapOf(
                             "videoId" to videoId,
                             "reason" to "media3_data_source_interrupted"
                         ))
-                        throw java.io.IOException("Online stream resolution cancelled", cancelled)
-                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw java.io.IOException("Online stream resolution cancelled", interrupted)
+                    } catch (cancelled: CancellationException) {
+                        job.cancel()
                         logger.debug("online", "resolution_cancelled", context = mapOf(
                             "videoId" to videoId,
                             "reason" to "coroutine_cancelled"
                         ))
                         throw java.io.IOException("Online stream resolution cancelled", cancelled)
-                    } catch (error: Exception) {
-                        logger.error("online", "data_source_resolution_failed", context = mapOf("videoId" to videoId), throwable = error)
-                        throw error
+                    } catch (timeout: TimeoutException) {
+                        job.cancel()
+                        future.cancel(true)
+                        logger.error("online", "resolution_timeout", context = mapOf("videoId" to videoId))
+                        throw java.io.IOException("Online stream resolution timed out", timeout)
+                    } catch (execution: ExecutionException) {
+                        val cause = execution.cause ?: execution
+                        if (cause is kotlinx.coroutines.CancellationException || cause is InterruptedException) {
+                            logger.debug("online", "resolution_cancelled", context = mapOf(
+                                "videoId" to videoId,
+                                "reason" to "coroutine_cancelled"
+                            ))
+                            throw java.io.IOException("Online stream resolution cancelled", cause)
+                        }
+                        logger.error("online", "data_source_resolution_failed", context = mapOf("videoId" to videoId), throwable = cause)
+                        if (cause is java.io.IOException) throw cause
+                        throw java.io.IOException(cause.message ?: "Online stream resolution failed", cause)
+                    } finally {
+                        activeJob = null
+                        activeFuture = null
                     }
+
                     if (resolution.url.isBlank() || !resolution.url.startsWith("http")) {
                         throw java.io.IOException("Online stream resolver returned an invalid URL")
                     }
@@ -168,6 +215,10 @@ class FloWaveDataSourceFactory(
             }
 
             override fun close() {
+                activeJob?.cancel()
+                activeJob = null
+                activeFuture?.cancel(true)
+                activeFuture = null
                 activeDataSource?.close()
                 activeDataSource = null
             }

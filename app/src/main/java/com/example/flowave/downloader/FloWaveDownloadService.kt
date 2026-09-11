@@ -26,7 +26,9 @@ class FloWaveDownloadService : Service() {
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
     private lateinit var downloadEngine: SealStyleDownloadEngine
-    private val activeDownloads = java.util.concurrent.atomic.AtomicInteger(0)
+    private val lock = Any()
+    private val activeTasks = mutableMapOf<String, Job>()
+    @Volatile private var latestStartId = 0
     private val downloadDao by lazy { AppDatabase.getDatabase(applicationContext).downloadDao() }
     private val repository by lazy { FloWaveRepository(applicationContext) }
 
@@ -37,12 +39,17 @@ class FloWaveDownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val targetUrl = intent?.getStringExtra(EXTRA_URL) ?: run {
-            if (activeDownloads.get() == 0) stopSelf(startId)
-            return START_NOT_STICKY
+        synchronized(lock) {
+            latestStartId = startId
         }
-        if (!DownloadInput.isHttpUrl(targetUrl)) {
-            stopSelf(startId)
+        val targetUrl = intent?.getStringExtra(EXTRA_URL)
+        if (targetUrl.isNullOrBlank() || !DownloadInput.isHttpUrl(targetUrl)) {
+            synchronized(lock) {
+                if (activeTasks.isEmpty()) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf(startId)
+                }
+            }
             return START_NOT_STICKY
         }
         val outputDir = File(
@@ -52,14 +59,13 @@ class FloWaveDownloadService : Service() {
         val taskId = "url_${UUID.randomUUID()}"
         val downloadEntry = DownloadEntry(
             id = taskId,
-            trackTitle = intent?.getStringExtra(EXTRA_TITLE)?.ifBlank { null } ?: targetUrl,
-            artistName = intent?.getStringExtra(EXTRA_ARTIST).orEmpty().ifBlank { "Online download" },
-            thumbnailUrl = intent?.getStringExtra(EXTRA_THUMBNAIL),
+            trackTitle = intent.getStringExtra(EXTRA_TITLE)?.ifBlank { null } ?: targetUrl,
+            artistName = intent.getStringExtra(EXTRA_ARTIST).orEmpty().ifBlank { "Online download" },
+            thumbnailUrl = intent.getStringExtra(EXTRA_THUMBNAIL),
             downloadUrl = targetUrl,
             status = DownloadStatus.DOWNLOADING
         )
 
-        activeDownloads.incrementAndGet()
         val initialNotification = buildNotification("Initializing download...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -67,7 +73,7 @@ class FloWaveDownloadService : Service() {
             startForeground(NOTIFICATION_ID, initialNotification)
         }
 
-        serviceScope.launch {
+        val job = serviceScope.launch {
             try {
                 if (downloadDao.getDownloadByUrl(targetUrl) != null) {
                     return@launch
@@ -91,9 +97,16 @@ class FloWaveDownloadService : Service() {
                             downloadDao.markFailed(taskId, state.message, DownloadStatus.FAILED)
                             updateNotification("Error: ${state.message}", 0)
                         }
+                        is DownloadState.Cancelled -> {
+                            downloadDao.markFailed(taskId, "Download cancelled", DownloadStatus.FAILED)
+                            updateNotification("Download cancelled", 0)
+                        }
                         else -> {}
                     }
                 }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                downloadDao.markFailed(taskId, "Download cancelled", DownloadStatus.FAILED)
+                throw cancelled
             } catch (error: Exception) {
                 downloadDao.markFailed(
                     taskId,
@@ -102,12 +115,18 @@ class FloWaveDownloadService : Service() {
                 )
                 updateNotification("Error: ${error.message ?: "Download failed"}", 0)
             } finally {
-                val remaining = activeDownloads.decrementAndGet()
-                if (remaining <= 0) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelfResult(startId)
+                synchronized(lock) {
+                    activeTasks.remove(taskId)
+                    if (activeTasks.isEmpty()) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelfResult(latestStartId)
+                    }
                 }
             }
+        }
+
+        synchronized(lock) {
+            activeTasks[taskId] = job
         }
 
         return START_NOT_STICKY
@@ -116,6 +135,9 @@ class FloWaveDownloadService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        synchronized(lock) {
+            activeTasks.clear()
+        }
         serviceJob.cancel()
         super.onDestroy()
     }
