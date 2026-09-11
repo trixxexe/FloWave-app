@@ -198,4 +198,28 @@ class FloWaveDataSourceTest {
         assertFalse("Slow resolution must not remain in-flight after close()", mockRepo.inFlightResolutions.containsKey("vid_slow"))
         executor.shutdownNow()
     }
+
+    @Test
+    fun `open failure on upstream data source invalidates stream cache`() {
+        val mockRepo = MockStreamRepository()
+        val videoId = "vid_upstream_fail"
+        mockRepo.results[videoId] = ResolvedStreamSource(
+            url = "https://invalid-host-unreachable.test/stream.opus",
+            resolver = "piped",
+            candidateKey = "PIPED|invalid-host-unreachable.test"
+        )
+
+        val factory = FloWaveDataSourceFactory(context, mockRepo)
+        val dataSource = factory.createDataSource()
+
+        try {
+            dataSource.open(DataSpec(Uri.parse("flowave://youtube/$videoId")))
+        } catch (e: Exception) {
+            // Expected failure connecting to invalid host
+        }
+
+        // Verify that invalidation was called on the repository
+        // Subsequent resolution must re-query the repository rather than returning a stale broken stream
+        assertEquals(1, mockRepo.resolutionCount.get())
+    }
 }

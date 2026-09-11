@@ -128,8 +128,12 @@ class FloWaveDataSourceFactory(
                         val httpStatus = (error as? HttpDataSource.InvalidResponseCodeException)?.responseCode
                         val failureClass = httpStatus?.let { OnlinePlaybackPolicy.classifyHttpStatus(it) }
                             ?: "media_open_failure"
-                        if (resolution.candidateKey != null && !cancelled) {
-                            streamRepository.markUnplayableStream(videoId, failureClass)
+                        if (!cancelled) {
+                            if (resolution.candidateKey != null) {
+                                streamRepository.markUnplayableStream(videoId, failureClass)
+                            }
+                            streamRepository.invalidateStreamUrl(videoId)
+                            FloWaveCacheManager.invalidate(videoId)
                         }
                         if (cancelled) {
                             logger.debug("online", "stream_open_cancelled", context = mapOf(

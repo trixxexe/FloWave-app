@@ -26,10 +26,13 @@ class FloWaveApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         runtimeScope.launch {
-            val logger = com.example.flowave.diagnostics.FloWaveLogger.getInstance(this@FloWaveApplication)
+            val libDir = applicationInfo.nativeLibraryDir?.let { java.io.File(it) }
+            val pythonZip = libDir?.let { java.io.File(it, "libpython.zip.so") }
             logger.info("downloader", "runtime_initialization_started", context = mapOf(
                 "abis" to android.os.Build.SUPPORTED_ABIS.joinToString(","),
-                "nativeLibraryDirPresent" to (applicationInfo.nativeLibraryDir?.isNotBlank() == true)
+                "nativeLibraryDir" to (libDir?.absolutePath ?: "none"),
+                "libpythonZipExists" to (pythonZip?.exists() == true),
+                "libpythonZipLength" to (pythonZip?.takeIf { it.exists() }?.length() ?: -1L)
             ))
             runCatching {
                 withTimeout(20_000L) {
