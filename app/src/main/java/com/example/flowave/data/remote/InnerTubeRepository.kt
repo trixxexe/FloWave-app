@@ -710,39 +710,6 @@ class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        // Prefer the embedded yt-dlp resolver. It follows the current YouTube
-        // player-client/signature rules and avoids stale hard-coded InnerTube
-        // client versions. The legacy InnerTube chain remains a fallback for
-        // devices where the optional runtime could not initialize.
-        if (FloWaveRuntime.ready) {
-            streamUrlCache[videoId]?.second?.let { cachedUrl ->
-                if (!isStreamUrlExpired(cachedUrl)) {
-                    logger?.debug("online", "resolver_cache_hit", context = mapOf("videoId" to videoId))
-                    return@withContext cachedUrl
-                }
-            }
-        }
-        if (FloWaveRuntime.ready) {
-            localStreamResolver?.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")?.let { result ->
-                result.onSuccess { resolved ->
-                    streamUrlCache[videoId] = System.currentTimeMillis() to resolved
-                }.onFailure { error ->
-                    logger?.warn("online", "resolver_attempt_failed", context = mapOf(
-                        "videoId" to videoId,
-                        "resolver" to "embedded",
-                        "attempt" to 1,
-                        "failureClass" to com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(error)
-                    ), throwable = error)
-                }
-                result.getOrNull()?.let { return@withContext it }
-            }
-        } else {
-            logger?.debug("online", "embedded_resolver_skipped", context = mapOf(
-                "videoId" to videoId,
-                "reason" to "optional_runtime_unavailable"
-            ))
-        }
-
         // Check cache first (valid for 2 hours)
         val cached = streamUrlCache[videoId]
         if (cached != null) {
@@ -834,6 +801,30 @@ class InnerTubeRepository(context: Context? = null) {
                     "failureClass" to com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(e)
                 ), throwable = e)
             }
+        }
+
+        // Embedded yt-dlp is an optional resolver fallback. InnerTube remains
+        // the primary online resolver and retains the stable-ID/lazy Media3
+        // contract even when this runtime is unavailable.
+        if (FloWaveRuntime.ready) {
+            localStreamResolver?.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")?.let { result ->
+                result.onSuccess { resolved ->
+                    streamUrlCache[videoId] = System.currentTimeMillis() to resolved
+                }.onFailure { error ->
+                    logger?.warn("online", "resolver_attempt_failed", context = mapOf(
+                        "videoId" to videoId,
+                        "resolver" to "embedded",
+                        "attempt" to 1,
+                        "failureClass" to com.example.flowave.audio.OnlinePlaybackPolicy.classifyResolverFailure(error)
+                    ), throwable = error)
+                }
+                result.getOrNull()?.let { return@withContext it }
+            }
+        } else {
+            logger?.debug("online", "embedded_resolver_skipped", context = mapOf(
+                "videoId" to videoId,
+                "reason" to "optional_runtime_unavailable"
+            ))
         }
 
         // Piped Public API Fallback Stream Extraction
