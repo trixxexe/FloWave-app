@@ -88,6 +88,7 @@ fun MainScreen() {
     var searchOnlineResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var downloaderSearchResults by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
     var isDownloaderSearching by remember { mutableStateOf(false) }
+    var downloaderSearchError by remember { mutableStateOf<String?>(null) }
     var downloaderSearchJob by remember { mutableStateOf<Job?>(null) }
     var currentLrcLines by remember { mutableStateOf<List<LrcLine>>(emptyList()) }
 
@@ -434,7 +435,7 @@ fun MainScreen() {
                             coroutineScope.launch {
                                 try {
                                     Toast.makeText(context, "Extracting audio: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    downloader.downloadAudioTrack(online, "")
+                                    downloader.startDownload(online)
                                 } catch (e: Exception) {
                                     Toast.makeText(context, "Download error: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
@@ -455,7 +456,7 @@ fun MainScreen() {
                             coroutineScope.launch {
                                 try {
                                     Toast.makeText(context, "Starting download: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    downloader.downloadAudioTrack(online, "")
+                                    downloader.startDownload(online)
                                 } catch (e: Exception) {
                                     Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
@@ -511,13 +512,21 @@ fun MainScreen() {
                     3 -> DownloaderScreen(
                         downloadEntries = downloadEntries,
                         searchResults = downloaderSearchResults,
+                        isSearching = isDownloaderSearching,
+                        searchError = downloaderSearchError,
                         onSearchKeyword = { keyword ->
                             downloaderSearchJob?.cancel()
                             if (keyword.isNotBlank()) {
                                 downloaderSearchJob = coroutineScope.launch {
                                     isDownloaderSearching = true
+                                    downloaderSearchError = null
                                     downloaderSearchResults = try {
-                                        downloader.inspect(keyword.trim()).getOrDefault(emptyList()).map { info ->
+                                        val result = downloader.inspect(keyword.trim())
+                                        result.exceptionOrNull()?.let { error ->
+                                            downloaderSearchError = error.message ?: "Search failed"
+                                            Toast.makeText(context, "Search failed: ${error.message ?: "yt-dlp unavailable"}", Toast.LENGTH_LONG).show()
+                                        }
+                                        result.getOrDefault(emptyList()).map { info ->
                                             InnerTubeTrack(
                                                 id = info.id ?: info.webpageUrl,
                                                 title = info.title,
@@ -529,6 +538,7 @@ fun MainScreen() {
                                             )
                                         }
                                     } catch (e: Exception) {
+                                        downloaderSearchError = e.message ?: "Search failed"
                                         android.util.Log.e("MainScreen", "Downloader search failed: ${e.message}")
                                         emptyList()
                                     } finally {
@@ -537,6 +547,7 @@ fun MainScreen() {
                                 }
                             } else {
                                 downloaderSearchResults = emptyList()
+                                downloaderSearchError = null
                             }
                         },
                         onDownloadTrack = { track ->

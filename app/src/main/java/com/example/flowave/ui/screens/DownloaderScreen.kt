@@ -35,6 +35,8 @@ import com.example.flowave.ui.theme.*
 fun DownloaderScreen(
     downloadEntries: List<DownloadEntry>,
     searchResults: List<InnerTubeTrack>,
+    isSearching: Boolean = false,
+    searchError: String? = null,
     onSearchKeyword: (String) -> Unit,
     onDownloadTrack: (InnerTubeTrack) -> Unit,
     onStartUrlDownload: (String) -> Unit,
@@ -221,6 +223,20 @@ fun DownloaderScreen(
                     }
                 }
             }
+        }
+
+        if (isSearching) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = CyanNeon, strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Searching song…", color = TextMuted, fontSize = 13.sp)
+            }
+        }
+        searchError?.let { message ->
+            Text(message, color = Color(0xFFFF8A80), fontSize = 13.sp, modifier = Modifier.padding(vertical = 6.dp))
         }
 
         Spacer(modifier = Modifier.height(16.dp))

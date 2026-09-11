@@ -10,6 +10,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withTimeout
 
 /**
  * Initializes the same embedded yt-dlp toolchain used by Seal, without spawning
@@ -24,12 +26,25 @@ class FloWaveApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         runtimeScope.launch {
+            val logger = com.example.flowave.diagnostics.FloWaveLogger.getInstance(this@FloWaveApplication)
+            logger.info("downloader", "runtime_initialization_started", context = mapOf(
+                "abis" to android.os.Build.SUPPORTED_ABIS.joinToString(","),
+                "nativeLibraryDirPresent" to (applicationInfo.nativeLibraryDir?.isNotBlank() == true)
+            ))
             runCatching {
-                YoutubeDL.init(this@FloWaveApplication)
-                FFmpeg.init(this@FloWaveApplication)
+                withTimeout(20_000L) {
+                    runInterruptible(Dispatchers.IO) {
+                        YoutubeDL.init(this@FloWaveApplication)
+                        FFmpeg.init(this@FloWaveApplication)
+                    }
+                }
                 FloWaveRuntime.markReady(true)
+                logger.info("downloader", "runtime_initialization_succeeded")
             }.onFailure {
                 FloWaveRuntime.markReady(false)
+                logger.error("downloader", "runtime_initialization_failed", context = mapOf(
+                    "failureClass" to it::class.simpleName.orEmpty()
+                ), throwable = it)
                 Log.e(TAG, "Embedded yt-dlp runtime initialization failed", it)
             }
         }

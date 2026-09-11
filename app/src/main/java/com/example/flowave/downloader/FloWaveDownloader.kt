@@ -24,7 +24,7 @@ class FloWaveDownloader(
     private val logger = FloWaveLogger.getInstance(context)
     private val downloadDao = AppDatabase.getDatabase(context).downloadDao()
     private val innerTubeRepo = InnerTubeRepository.getInstance(context)
-    private val sealEngine = SealStyleDownloadEngine()
+    private val sealEngine = SealStyleDownloadEngine(context)
 
     val allDownloadEntries: Flow<List<DownloadEntry>> = downloadDao.getAllDownloads()
 
@@ -107,7 +107,20 @@ class FloWaveDownloader(
         )
     }
 
-    suspend fun startDownload(track: InnerTubeTrack) = downloadAudioTrack(track, "")
+    suspend fun startDownload(track: InnerTubeTrack) {
+        val result = download(
+            DownloadMediaInfo(
+                id = track.id,
+                webpageUrl = if (DownloadInput.isHttpUrl(track.id)) track.id
+                else "https://www.youtube.com/watch?v=${track.id}",
+                title = track.title,
+                creator = track.artist,
+                thumbnailUrl = track.thumbnailUrl,
+                durationSeconds = null
+            )
+        )
+        result.getOrThrow()
+    }
 
     /**
      * The streamUrl parameter is retained for source compatibility with the UI;

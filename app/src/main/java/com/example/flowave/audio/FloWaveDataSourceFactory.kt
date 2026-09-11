@@ -7,6 +7,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.diagnostics.FloWaveLogger
@@ -77,14 +78,26 @@ class FloWaveDataSourceFactory(
                         activeDataSource?.open(resolvedSpec) ?: -1L
                     } catch (error: Exception) {
                         val cancelled = error is InterruptedException || error is kotlinx.coroutines.CancellationException
+                        val httpStatus = (error as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                        val failureClass = httpStatus?.let { OnlinePlaybackPolicy.classifyHttpStatus(it) }
+                            ?: "media_open_failure"
                         if (resolution.candidateKey != null && !cancelled) {
-                            streamRepository.markUnplayableStream(videoId, "media_open_failure")
+                            streamRepository.markUnplayableStream(videoId, failureClass)
                         }
                         if (cancelled) {
                             logger.debug("online", "stream_open_cancelled", context = mapOf(
                                 "videoId" to videoId,
-                                "reason" to error::class.simpleName.orEmpty()
+                                "reason" to error::class.simpleName.orEmpty(),
+                                "httpStatus" to httpStatus,
+                                "failureClass" to failureClass
                             ))
+                        } else {
+                            logger.error("online", "stream_open_failed", context = mapOf(
+                                "videoId" to videoId,
+                                "httpStatus" to httpStatus,
+                                "failureClass" to failureClass,
+                                "errorType" to error::class.simpleName.orEmpty()
+                            ), throwable = error)
                         }
                         throw error
                     }
@@ -104,12 +117,16 @@ class FloWaveDataSourceFactory(
                     logger.info("online", "stream_open_response", context = mapOf(
                         "videoId" to videoId,
                         "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
+                        "contentEncoding" to activeDataSource?.responseHeaders.orEmpty().entries
+                            .firstOrNull { it.key.equals("Content-Encoding", ignoreCase = true) }
+                            ?.value?.firstOrNull().orEmpty().take(32),
                         "contentLength" to (contentLength ?: openedLength.toString()),
                         "contentRange" to range.orEmpty().take(80),
                         "acceptRanges" to acceptRanges.orEmpty().take(32),
                         "openedLength" to openedLength,
                         "urlHost" to resolvedSpec.uri.host.orEmpty(),
-                        "urlPath" to resolvedSpec.uri.path.orEmpty().take(80)
+                        "urlPath" to resolvedSpec.uri.path.orEmpty().take(80),
+                        "finalHost" to activeDataSource?.uri?.host.orEmpty()
                     ))
                     if (!com.example.flowave.data.remote.ResolverStreamSelector.isPlayableResponseContentType(contentType)) {
                         activeDataSource?.close()
@@ -124,17 +141,14 @@ class FloWaveDataSourceFactory(
                         ))
                         throw java.io.IOException("Resolved stream returned non-media content")
                     }
-                    logger.info("online", "playable_stream_validation_success", context = mapOf(
+                    logger.info("online", "stream_opened_waiting_for_media3_ready", context = mapOf(
                         "videoId" to videoId,
+                        "resolver" to resolution.resolver,
+                        "candidateKey" to resolution.candidateKey,
                         "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
-                        "openedLength" to openedLength
+                        "openedLength" to openedLength,
+                        "openDurationMs" to ((System.nanoTime() - openStartedAt) / 1_000_000L)
                     ))
-                    if (resolution.candidateKey != null) {
-                        streamRepository.markPlayableStream(
-                            videoId,
-                            (System.nanoTime() - openStartedAt) / 1_000_000L
-                        )
-                    }
                     return openedLength
                 }
                 activeDataSource = if (scheme == "http" || scheme == "https") cacheDataSource else defaultDataSource

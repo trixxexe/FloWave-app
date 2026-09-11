@@ -32,7 +32,7 @@ class FloWaveDownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        downloadEngine = SealStyleDownloadEngine()
+        downloadEngine = SealStyleDownloadEngine(this)
         createNotificationChannel()
     }
 

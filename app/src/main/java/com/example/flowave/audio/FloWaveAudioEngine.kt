@@ -315,6 +315,19 @@ class FloWaveAudioEngine(private val context: Context) {
 
                     override fun onPlaybackStateChanged(state: Int) {
                         logger.debug("player", "state_changed", context = mapOf("state" to state))
+                        if (state == Player.STATE_READY) {
+                            val readyTrack = _playbackState.value.currentTrack
+                            if (readyTrack?.isOnline == true) {
+                                val sourceId = PlaybackIdentity.sourceId(readyTrack)
+                                if (sourceId != null) {
+                                    innerTubeRepo.markPlayableStream(sourceId, 0L)
+                                    logger.info("online", "playable_stream_validation_success", context = mapOf(
+                                        "videoId" to sourceId,
+                                        "validation" to "media3_ready"
+                                    ))
+                                }
+                            }
+                        }
                         _playbackState.value = _playbackState.value.copy(
                             isBuffering = state == Player.STATE_BUFFERING,
                             errorMessage = if (state == Player.STATE_READY) null else _playbackState.value.errorMessage
@@ -388,6 +401,15 @@ class FloWaveAudioEngine(private val context: Context) {
                         
                         val currentTrack = _playbackState.value.currentTrack
                         if (currentTrack != null && currentTrack.isOnline) {
+                            val sourceId = PlaybackIdentity.sourceId(currentTrack)
+                            if (sourceId != null) {
+                                innerTubeRepo.markUnplayableStream(
+                                    sourceId,
+                                    "media3_${error.errorCodeName.lowercase()}"
+                                )
+                                innerTubeRepo.invalidateStreamUrl(sourceId)
+                                FloWaveCacheManager.invalidate(sourceId)
+                            }
                             if (onlineRecoveryJob?.isActive == true) return
                             if (!networkAvailable) {
                                 wasPlayingBeforeDisconnect = true

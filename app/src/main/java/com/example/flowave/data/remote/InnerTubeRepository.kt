@@ -87,7 +87,7 @@ object InnerTubeClients {
 class InnerTubeRepository(context: Context? = null) {
     private val appContext = context?.applicationContext
     private val logger = appContext?.let { FloWaveLogger.getInstance(it) }
-    private val localStreamResolver = appContext?.let { SealStyleDownloadEngine() }
+    private val localStreamResolver = appContext?.let { SealStyleDownloadEngine(it) }
     private val client = OkHttpClient.Builder()
         .connectTimeout(FloWaveConstants.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(FloWaveConstants.READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
