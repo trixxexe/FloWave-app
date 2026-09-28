@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -91,13 +92,12 @@ class DownloadServiceLifecycleTest {
         assertEquals(2, coordinator.latestStartId)
         assertEquals(2, coordinator.activeTasks.size)
 
+        val job1 = coordinator.activeTasks["task_1"]!!
+        val job2 = coordinator.activeTasks["task_2"]!!
+
         // Complete task 1 first
         task1Deferred.complete(Unit)
-        // Wait briefly for task 1 finally block to execute
-        var attempts = 0
-        while (coordinator.activeTasks.containsKey("task_1") && attempts++ < 50) {
-            kotlinx.coroutines.delay(10)
-        }
+        job1.join()
 
         // Service should NOT have stopped because task 2 is still active
         assertFalse(coordinator.activeTasks.containsKey("task_1"))
@@ -107,10 +107,7 @@ class DownloadServiceLifecycleTest {
 
         // Now complete task 2
         task2Deferred.complete(Unit)
-        attempts = 0
-        while (coordinator.activeTasks.isNotEmpty() && attempts++ < 50) {
-            kotlinx.coroutines.delay(10)
-        }
+        job2.join()
 
         // Now all tasks are done; service should stop with latestStartId (2)
         assertTrue(coordinator.activeTasks.isEmpty())
@@ -131,12 +128,12 @@ class DownloadServiceLifecycleTest {
         coordinator.onStartCommand("https://example.com/1", 1, scope, task1Deferred)
         coordinator.onStartCommand("https://example.com/2", 2, scope, task2Deferred)
 
+        val job1 = coordinator.activeTasks["task_1"]!!
+        val job2 = coordinator.activeTasks["task_2"]!!
+
         // Task 2 finishes BEFORE Task 1
         task2Deferred.complete(Unit)
-        var attempts = 0
-        while (coordinator.activeTasks.containsKey("task_2") && attempts++ < 50) {
-            kotlinx.coroutines.delay(10)
-        }
+        job2.join()
 
         // Task 1 still running; service must not stop
         assertFalse(coordinator.stopForegroundCalled.get())
@@ -144,10 +141,7 @@ class DownloadServiceLifecycleTest {
 
         // Now Task 1 finishes
         task1Deferred.complete(Unit)
-        attempts = 0
-        while (coordinator.activeTasks.isNotEmpty() && attempts++ < 50) {
-            kotlinx.coroutines.delay(10)
-        }
+        job1.join()
 
         // Must stop with latestStartId (2), NOT task 1's startId (1)
         assertTrue(coordinator.stopForegroundCalled.get())
@@ -169,11 +163,9 @@ class DownloadServiceLifecycleTest {
         assertFalse(coordinator.stopForegroundCalled.get())
         assertEquals(1, coordinator.activeTasks.size)
 
+        val job1 = coordinator.activeTasks["task_1"]!!
         task1Deferred.complete(Unit)
-        var attempts = 0
-        while (coordinator.activeTasks.isNotEmpty() && attempts++ < 50) {
-            kotlinx.coroutines.delay(10)
-        }
+        job1.join()
 
         assertTrue(coordinator.stopForegroundCalled.get())
         assertEquals(2, coordinator.stoppedWithStartId.get())
@@ -188,15 +180,11 @@ class DownloadServiceLifecycleTest {
         coordinator.onStartCommand("https://example.com/audio", 1, scope, taskDeferred)
 
         val taskJob = coordinator.activeTasks["task_1"]!!
-        taskJob.cancel() // Cancel the job
-
-        var attempts = 0
-        while (coordinator.activeTasks.isNotEmpty() && attempts++ < 50) {
-            kotlinx.coroutines.delay(10)
-        }
+        taskJob.cancelAndJoin() // Deterministically cancel and wait for cleanup
 
         assertTrue(coordinator.activeTasks.isEmpty())
         assertEquals("CANCELLED", coordinator.taskStatus["task_1"])
         assertTrue(coordinator.stopForegroundCalled.get())
+        assertEquals(1, coordinator.stoppedWithStartId.get())
     }
 }
