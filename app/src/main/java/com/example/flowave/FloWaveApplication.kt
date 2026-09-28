@@ -2,6 +2,7 @@ package com.example.flowave
 
 import android.app.Application
 import android.util.Log
+import com.example.flowave.diagnostics.FloWaveLogger
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,7 @@ import kotlinx.coroutines.withTimeout
  */
 class FloWaveApplication : Application() {
     private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val logger by lazy { FloWaveLogger.getInstance(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -43,12 +45,13 @@ class FloWaveApplication : Application() {
                 }
                 FloWaveRuntime.markReady(true)
                 logger.info("downloader", "runtime_initialization_succeeded")
-            }.onFailure {
+                Unit
+            }.onFailure { error: Throwable ->
                 FloWaveRuntime.markReady(false)
                 logger.error("downloader", "runtime_initialization_failed", context = mapOf(
-                    "failureClass" to it::class.simpleName.orEmpty()
-                ), throwable = it)
-                Log.e(TAG, "Embedded yt-dlp runtime initialization failed", it)
+                    "failureClass" to error::class.simpleName.orEmpty()
+                ), throwable = error)
+                Log.e(TAG, "Embedded yt-dlp runtime initialization failed", error)
             }
         }
     }
