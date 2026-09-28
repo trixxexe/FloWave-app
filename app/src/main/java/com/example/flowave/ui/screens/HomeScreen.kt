@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
@@ -46,10 +48,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,6 +85,7 @@ fun HomeScreen(
     onProfileClick: () -> Unit,
     onDownloaderClick: () -> Unit,
     onScanClick: () -> Unit,
+    onExploreOnlineClick: (() -> Unit)? = null,
     onPlayQueue: ((List<Track>, Int) -> Unit)? = null,
     settingsJson: String = com.example.flowave.utils.SettingsSchema.getDefaultJson(),
     modifier: Modifier = Modifier
@@ -275,15 +280,82 @@ fun HomeScreen(
 
         if (folderTracks.isEmpty()) {
             item {
-                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 16.dp) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.LibraryMusic, contentDescription = null, tint = TextMuted, modifier = Modifier.size(34.dp))
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            if (tracks.isEmpty()) "No device songs indexed yet. Grant audio access and tap Rescan." else "No local songs match this search.",
-                            color = TextMuted,
-                            fontSize = 13.sp
-                        )
+                if (tracks.isEmpty()) {
+                    GlassCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        cornerRadius = 20.dp
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(22.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(CircleShape)
+                                    .background(Brush.linearGradient(listOf(CyanNeon.copy(alpha = 0.2f), PurpleNeon.copy(alpha = 0.2f)))),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.LibraryMusic, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(30.dp))
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "Your Offline Music Hub",
+                                color = TextPrimary,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "FloWave indexes bit-perfect FLAC, MP3, WAV, and AAC from your device. Grant audio permissions to start listening.",
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                                lineHeight = 17.sp
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = onScanClick,
+                                    colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Scan Storage", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                                if (onExploreOnlineClick != null) {
+                                    Button(
+                                        onClick = onExploreOnlineClick,
+                                        colors = ButtonDefaults.buttonColors(containerColor = PurpleNeon, contentColor = PureBlack),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Explore Online", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 16.dp) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.LibraryMusic, contentDescription = null, tint = TextMuted, modifier = Modifier.size(34.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "No local songs match this search.",
+                                color = TextMuted,
+                                fontSize = 13.sp
+                            )
+                        }
                     }
                 }
             }

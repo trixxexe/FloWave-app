@@ -60,12 +60,18 @@ interface TrackDao {
 
     @Query("SELECT * FROM tracks WHERE source = 'IMPORTED'")
     suspend fun getImportedTracks(): List<Track>
+
+    @Query("SELECT * FROM tracks ORDER BY title ASC")
+    suspend fun getAllTracksSync(): List<Track>
 }
 
 @Dao
 interface PlaylistDao {
     @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
     fun getAllPlaylists(): Flow<List<Playlist>>
+
+    @Query("SELECT * FROM playlists WHERE id = :playlistId LIMIT 1")
+    suspend fun getPlaylistById(playlistId: Long): Playlist?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlaylist(playlist: Playlist): Long
@@ -83,6 +89,14 @@ interface PlaylistDao {
         ORDER BY ref.addedAt ASC
     """)
     fun getTracksForPlaylist(playlistId: Long): Flow<List<Track>>
+
+    @Query("""
+        SELECT t.* FROM tracks t
+        INNER JOIN playlist_track_cross_ref ref ON t.id = ref.trackId
+        WHERE ref.playlistId = :playlistId
+        ORDER BY ref.addedAt ASC
+    """)
+    suspend fun getTracksForPlaylistSync(playlistId: Long): List<Track>
 }
 
 @Dao

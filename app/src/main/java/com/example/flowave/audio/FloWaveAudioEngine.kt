@@ -927,10 +927,10 @@ class FloWaveAudioEngine(private val context: Context) {
         sleepTimerJob = scope.launch {
             while (true) {
                 val remaining = endTime - System.currentTimeMillis()
-                if (remaining <= 3000L && remaining > 0) {
-                    // Smooth 3-second logarithmic volume fade-out
-                    val fadeFactor = (remaining / 3000f).coerceIn(0f, 1f)
-                    exoPlayer?.volume = fadeFactor
+                if (remaining in 1..15000L) {
+                    // Smooth 15-second gentle quadratic volume fade-out
+                    val normalized = (remaining / 15000f).coerceIn(0f, 1f)
+                    exoPlayer?.volume = normalized * normalized
                 }
                 if (remaining <= 0) {
                     _playbackState.value = _playbackState.value.copy(sleepTimerRemainingMs = 0L)

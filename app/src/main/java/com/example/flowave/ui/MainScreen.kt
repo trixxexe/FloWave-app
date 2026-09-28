@@ -102,8 +102,17 @@ fun MainScreen() {
 
     var showCrashReportDialog by remember { mutableStateOf(false) }
     var crashReportContent by remember { mutableStateOf("") }
+    val hasCompletedOnboarding = remember(settingsJson) {
+        SettingsSchema.getBoolean(settingsJson, "has_completed_onboarding")
+    }
     var showOnboardingDialog by remember { mutableStateOf(false) }
     var onboardingStep by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(hasCompletedOnboarding) {
+        if (!hasCompletedOnboarding) {
+            showOnboardingDialog = true
+        }
+    }
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Home, 1: Explore, 2: Library, 3: Downloader, 4: EQ DSP, 5: Profile
     var isPlayerExpanded by remember { mutableStateOf(false) }
@@ -231,7 +240,24 @@ fun MainScreen() {
         if (currentTrack != null) {
             isMiniPlayerDismissed = false // Reset mini player visibility on track change
             try {
-                currentLrcLines = innerTubeRepo.fetchLrcLyrics(currentTrack.title, currentTrack.artist)
+                var lines: List<LrcLine> = emptyList()
+                if (!currentTrack.isOnline) {
+                    val rawUri = currentTrack.mediaUri.removePrefix("file://")
+                    val audioFile = java.io.File(rawUri)
+                    if (audioFile.exists()) {
+                        val sidecar1 = java.io.File(audioFile.parentFile, "${audioFile.nameWithoutExtension}.lrc")
+                        val sidecar2 = java.io.File(audioFile.parentFile, "${audioFile.name}.lrc")
+                        if (sidecar1.exists()) {
+                            lines = innerTubeRepo.parseLocalLrc(sidecar1)
+                        } else if (sidecar2.exists()) {
+                            lines = innerTubeRepo.parseLocalLrc(sidecar2)
+                        }
+                    }
+                }
+                if (lines.isEmpty()) {
+                    lines = innerTubeRepo.fetchLrcLyrics(currentTrack.title, currentTrack.artist)
+                }
+                currentLrcLines = lines
             } catch (e: Exception) {
                 currentLrcLines = emptyList()
             }
@@ -553,6 +579,7 @@ fun MainScreen() {
                                 Toast.makeText(context, "Device library refreshed", Toast.LENGTH_SHORT).show()
                             }
                         },
+                        onExploreOnlineClick = { selectedTab = 1 },
                         onPlayQueue = { queue, index -> audioEngine.setQueueAndPlay(queue, index) },
                         settingsJson = settingsJson
                     )
@@ -873,10 +900,13 @@ fun MainScreen() {
             )
         }
 
-        // Interactive Onboarding Tour Dialog
+        // Interactive Onboarding Tour Dialog (6 Comprehensive Slides with 3 Configuration Steps)
         if (showOnboardingDialog) {
             AlertDialog(
-                onDismissRequest = { showOnboardingDialog = false },
+                onDismissRequest = {
+                    coroutineScope.launch { profileRepo.updateSetting("has_completed_onboarding", true) }
+                    showOnboardingDialog = false
+                },
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -894,12 +924,15 @@ fun MainScreen() {
                         Text(
                             text = when (onboardingStep) {
                                 0 -> "Welcome to FloWave"
-                                1 -> "Dual Engine: Offline & Online"
+                                1 -> "1. Storage & Permissions"
+                                2 -> "2. Audio Hygiene Filters"
+                                3 -> "3. Streaming & Fidelity"
+                                4 -> "4. Studio DSP & Equalizer"
                                 else -> "Engineered by Ritam"
                             },
                             color = CyanNeon,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
+                            fontSize = 17.sp
                         )
                     }
                 },
@@ -908,26 +941,7 @@ fun MainScreen() {
                         when (onboardingStep) {
                             0 -> {
                                 Text(
-                                    "FloWave is an audiophile-grade dual-engine music workstation engineered for seamless offline hi-fi playback and limitless online streaming.",
-                                    color = TextPrimary,
-                                    fontSize = 13.sp,
-                                    lineHeight = 18.sp
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Text("Key Highlights:", color = CyanNeon, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text("• Top bar toggle for instant Offline / Online switching", color = TextPrimary, fontSize = 11.sp)
-                                        Text("• 10-band hardware DSP Equalizer & Bass Boost", color = TextPrimary, fontSize = 11.sp)
-                                        Text("• Lossless InnerTube YouTube Music streaming & yt-dlp downloader", color = TextPrimary, fontSize = 11.sp)
-                                        Text("• Synchronized scrolling LRC lyrics display", color = TextPrimary, fontSize = 11.sp)
-                                    }
-                                }
-                            }
-                            1 -> {
-                                Text(
-                                    "Effortlessly switch modes using the top-bar pill toggle:",
+                                    "FloWave is an audiophile-grade dual-engine music workstation combining bit-perfect offline local audio playback and limitless YouTube Music streaming.",
                                     color = TextPrimary,
                                     fontSize = 13.sp,
                                     lineHeight = 18.sp
@@ -944,7 +958,7 @@ fun MainScreen() {
                                     Icon(Icons.Default.CloudOff, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(24.dp))
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("Offline Mode (Cloud-Off)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("Offline Master (Cloud-Off)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                         Text("Zero placeholders. Hi-Res FLAC/MP3, Folders, Albums, Tag Editor, Smart Playlists.", color = TextMuted, fontSize = 10.sp)
                                     }
                                 }
@@ -960,8 +974,169 @@ fun MainScreen() {
                                     Icon(Icons.Default.Cloud, contentDescription = null, tint = PurpleNeon, modifier = Modifier.size(24.dp))
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
-                                        Text("Online Mode (Cloud)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("Online Stream (Cloud)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                         Text("InnerTube client extraction, live chart rankings, YouTube Music streams & audio downloader.", color = TextMuted, fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                            1 -> {
+                                Text(
+                                    "FloWave requires audio file access to index your music library, and notification permission to display interactive lockscreen controls.",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
+                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.FolderSpecial, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(20.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text("Audio Storage Access", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                                Text("Scans bit-perfect FLAC, MP3, WAV, and AAC", color = TextMuted, fontSize = 10.sp)
+                                            }
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Notifications, contentDescription = null, tint = PurpleNeon, modifier = Modifier.size(20.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text("Playback Notification & Lockscreen", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                                Text("Scrub seekbar and skip tracks from system shade", color = TextMuted, fontSize = 10.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    "🔒 Local files never leave your device. Zero telemetry or external tracking.",
+                                    color = TextMuted,
+                                    fontSize = 10.sp
+                                )
+                            }
+                            2 -> {
+                                Text(
+                                    "Ensure your music library stays clean and free from voice notes, notification chimes, and game sound effects.",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
+                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        val filterShort = SettingsSchema.getBoolean(settingsJson, "filter_short_audio")
+                                        val excludeFolders = SettingsSchema.getBoolean(settingsJson, "exclude_system_folders")
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Filter short clips (< 30s)", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                                Text("Excludes WhatsApp voice notes and sound FX", color = TextMuted, fontSize = 10.sp)
+                                            }
+                                            Switch(
+                                                checked = filterShort,
+                                                onCheckedChange = { coroutineScope.launch { profileRepo.updateSetting("filter_short_audio", it) } }
+                                            )
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Exclude chat & system folders", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                                Text("Ignores WhatsApp, Telegram, Ringtones, Alarms", color = TextMuted, fontSize = 10.sp)
+                                            }
+                                            Switch(
+                                                checked = excludeFolders,
+                                                onCheckedChange = { coroutineScope.launch { profileRepo.updateSetting("exclude_system_folders", it) } }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            3 -> {
+                                Text(
+                                    "Configure online streaming audio fidelity and caching preferences for YouTube Music InnerTube extraction.",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                val streamingQuality = SettingsSchema.getValue(settingsJson, "streaming_quality")
+                                val autoCache = SettingsSchema.getBoolean(settingsJson, "auto_cache_stream")
+                                val fadeSleep = SettingsSchema.getBoolean(settingsJson, "fade_out_sleep_timer")
+
+                                Text("Default Streaming Bitrate:", color = CyanNeon, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    listOf("High", "Medium", "DataSaver").forEach { q ->
+                                        FilterChip(
+                                            selected = streamingQuality == q,
+                                            onClick = { coroutineScope.launch { profileRepo.updateSetting("streaming_quality", q) } },
+                                            label = { Text(if (q == "DataSaver") "Saver" else q, fontSize = 10.sp) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = CyanNeon,
+                                                selectedLabelColor = PureBlack
+                                            )
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
+                                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Auto-cache streamed tracks", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                                Text("Saves mobile data on repeat plays", color = TextMuted, fontSize = 10.sp)
+                                            }
+                                            Switch(
+                                                checked = autoCache,
+                                                onCheckedChange = { coroutineScope.launch { profileRepo.updateSetting("auto_cache_stream", it) } }
+                                            )
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Fade-out sleep timer", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                                Text("15-second smooth exponential fade", color = TextMuted, fontSize = 10.sp)
+                                            }
+                                            Switch(
+                                                checked = fadeSleep,
+                                                onCheckedChange = { coroutineScope.launch { profileRepo.updateSetting("fade_out_sleep_timer", it) } }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            4 -> {
+                                Text(
+                                    "Experience studio-grade audio processing powered by Android's hardware audio effects engine.",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
+                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text("DSP Suite Features:", color = CyanNeon, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("• 10-Band Graphic Hardware Equalizer (32Hz to 16kHz)", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Sub-Bass Exciter & 3D Spatial Virtualizer", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• 'Ritam Audiophile Signature' acoustic profile", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Sidecar .lrc synchronized karaoke lyrics reader", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Bit-perfect 24-bit/96kHz direct audio pipeline", color = TextPrimary, fontSize = 11.sp)
                                     }
                                 }
                             }
@@ -972,33 +1147,34 @@ fun MainScreen() {
                                     fontSize = 13.sp,
                                     lineHeight = 18.sp
                                 )
-                                Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
                                 GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
                                     Column(modifier = Modifier.padding(12.dp)) {
                                         Text("Ritam's Developer Guarantee:", color = PinkNeon, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                         Spacer(modifier = Modifier.height(4.dp))
-                                        Text("• 100% Free & Open-Source Core", color = TextPrimary, fontSize = 11.sp)
-                                        Text("• Zero tracking or intrusive telemetry", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• 100% Free & Open-Source Core (GPL-3.0)", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Zero tracking, zero telemetry, zero analytics", color = TextPrimary, fontSize = 11.sp)
                                         Text("• Direct feedback & feature roadmap via Profile > Developer", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• M3U/M3U8 playlist export and backup support", color = TextPrimary, fontSize = 11.sp)
                                     }
                                 }
                             }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
-                        // Progress indicator dots
+                        // Progress indicator dots (6 dots)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            repeat(3) { index ->
+                            repeat(6) { index ->
                                 Box(
                                     modifier = Modifier
-                                        .padding(horizontal = 4.dp)
-                                        .size(if (index == onboardingStep) 8.dp else 6.dp)
+                                        .padding(horizontal = 3.dp)
+                                        .size(if (index == onboardingStep) 8.dp else 5.dp)
                                         .clip(CircleShape)
-                                        .background(if (index == onboardingStep) CyanNeon else TextMuted.copy(alpha = 0.4f))
+                                        .background(if (index == onboardingStep) CyanNeon else TextMuted.copy(alpha = 0.35f))
                                 )
                             }
                         }
@@ -1007,16 +1183,20 @@ fun MainScreen() {
                 confirmButton = {
                     Button(
                         onClick = {
-                            if (onboardingStep < 2) {
+                            if (onboardingStep < 5) {
                                 onboardingStep++
                             } else {
+                                coroutineScope.launch {
+                                    profileRepo.updateSetting("has_completed_onboarding", true)
+                                    repository.scanMediaStore()
+                                }
                                 showOnboardingDialog = false
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack)
                     ) {
                         Text(
-                            text = if (onboardingStep < 2) "Next" else "Get Started",
+                            text = if (onboardingStep < 5) "Next" else "Launch FloWave",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -1027,7 +1207,14 @@ fun MainScreen() {
                             Text("Back", color = TextMuted)
                         }
                     } else {
-                        TextButton(onClick = { showOnboardingDialog = false }) {
+                        TextButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    profileRepo.updateSetting("has_completed_onboarding", true)
+                                }
+                                showOnboardingDialog = false
+                            }
+                        ) {
                             Text("Skip", color = TextMuted)
                         }
                     }

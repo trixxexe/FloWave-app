@@ -1063,7 +1063,7 @@ open class InnerTubeRepository(context: Context? = null) {
         lrcLines
     }
 
-    private fun parseLrc(lrcContent: String): List<LrcLine> {
+    fun parseLrc(lrcContent: String): List<LrcLine> {
         val lines = mutableListOf<LrcLine>()
         val regex = Regex("\\[(\\d+):(\\d+\\.\\d+)\\](.*)")
         lrcContent.lines().forEach { line ->
@@ -1077,6 +1077,18 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
         return lines.sortedBy { it.timestampMs }
+    }
+
+    fun parseLocalLrc(file: java.io.File): List<LrcLine> {
+        return if (file.exists() && file.isFile) {
+            try {
+                parseLrc(file.readText())
+            } catch (e: Exception) {
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
     }
 
     private fun extractJsonFromHtml(html: String): String? {

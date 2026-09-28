@@ -220,6 +220,24 @@ class FloWaveRepository(private val context: Context) {
                         albumId
                     ).toString()
 
+                    // System & Chat audio exclusion (WhatsApp, Telegram, Ringtones, Notifications, Alarms)
+                    val fullPathLower = (filePath + (relativePath ?: "")).lowercase()
+                    val isSystemOrChat = fullPathLower.contains("whatsapp/media/whatsapp audio") ||
+                        fullPathLower.contains("whatsapp/media/whatsapp voice notes") ||
+                        fullPathLower.contains("telegram/telegram audio") ||
+                        fullPathLower.contains("/ringtones/") ||
+                        fullPathLower.contains("/notifications/") ||
+                        fullPathLower.contains("/alarms/") ||
+                        fullPathLower.contains("/android/media/")
+                    if (isSystemOrChat) {
+                        continue
+                    }
+
+                    // Filter short audio clips (< 30s) to exclude voice notes, UI sounds, and ringtones
+                    if (duration in 1..29999L) {
+                        continue
+                    }
+
                     val track = Track(
                         id = "local_$id",
                         title = title,
@@ -410,6 +428,40 @@ class FloWaveRepository(private val context: Context) {
         removed.forEach { trackDao.deleteTrack(it) }
         if (removed.isNotEmpty()) logger.warn("library", "stale_imports_removed", context = mapOf("count" to removed.size))
         removed.size
+    }
+
+    suspend fun exportPlaylistToM3u(playlistId: Long): String? = withContext(Dispatchers.IO) {
+        val playlist = playlistDao.getPlaylistById(playlistId) ?: return@withContext null
+        val tracks = playlistDao.getTracksForPlaylistSync(playlistId)
+        val sb = StringBuilder()
+        sb.append("#EXTM3U\n")
+        sb.append("#PLAYLIST:${playlist.name}\n\n")
+        tracks.forEach { track ->
+            val seconds = (track.durationMs / 1000).coerceAtLeast(0)
+            sb.append("#EXTINF:$seconds,${track.artist} - ${track.title}\n")
+            sb.append("${track.mediaUri}\n")
+        }
+        val file = File(context.cacheDir, "${playlist.name.replace("[^a-zA-Z0-9_.-]".toRegex(), "_")}.m3u8")
+        file.writeText(sb.toString())
+        file.absolutePath
+    }
+
+    suspend fun importPlaylistFromM3u(playlistName: String, m3uContent: String): Long = withContext(Dispatchers.IO) {
+        val playlistId = playlistDao.insertPlaylist(Playlist(name = playlistName, description = "Imported M3U Playlist"))
+        val lines = m3uContent.lines()
+        val allLocalTracks = trackDao.getAllTracksSync()
+        val trackByUri = allLocalTracks.associateBy { it.mediaUri }
+
+        lines.forEach { rawLine ->
+            val line = rawLine.trim()
+            if (line.isNotEmpty() && !line.startsWith("#")) {
+                val matched = trackByUri[line] ?: allLocalTracks.firstOrNull { it.mediaUri.endsWith(File(line).name) }
+                if (matched != null) {
+                    playlistDao.addTrackToPlaylist(PlaylistTrackCrossRef(playlistId = playlistId, trackId = matched.id))
+                }
+            }
+        }
+        playlistId
     }
 
     companion object {

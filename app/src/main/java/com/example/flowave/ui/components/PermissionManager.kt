@@ -32,6 +32,7 @@ fun PermissionManager(
         val list = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             list.add(Manifest.permission.READ_MEDIA_AUDIO)
+            list.add(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             list.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             list.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)

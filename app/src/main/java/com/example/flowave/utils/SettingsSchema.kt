@@ -83,8 +83,62 @@ object SettingsSchema {
             label = "Mini-player progress",
             description = "Show the seek progress control in the mini-player."
         ),
+        SettingDefinition(
+            key = "filter_short_audio",
+            type = SettingType.BOOLEAN,
+            defaultValue = "true",
+            category = "Library",
+            label = "Filter Short Audio (<30s)",
+            description = "Exclude voice notes, notification chimes, and ringtones from the music library."
+        ),
+        SettingDefinition(
+            key = "exclude_system_folders",
+            type = SettingType.BOOLEAN,
+            defaultValue = "true",
+            category = "Library",
+            label = "Exclude System/App Folders",
+            description = "Ignore WhatsApp Audio, Telegram, Ringtones, and Notifications."
+        ),
+        SettingDefinition(
+            key = "streaming_quality",
+            type = SettingType.CHOICE,
+            defaultValue = "High",
+            category = "Playback",
+            label = "Streaming Quality",
+            description = "Default bitrate for InnerTube online streaming.",
+            choices = listOf(
+                ChoiceOption("High", "High (256 kbps Opus)"),
+                ChoiceOption("Medium", "Medium (160 kbps Opus)"),
+                ChoiceOption("DataSaver", "Data Saver (64 kbps Opus)")
+            )
+        ),
+        SettingDefinition(
+            key = "auto_cache_stream",
+            type = SettingType.BOOLEAN,
+            defaultValue = "true",
+            category = "Playback",
+            label = "Auto-Cache Stream",
+            description = "Save streamed online tracks to offline cache to save data."
+        ),
+        SettingDefinition(
+            key = "fade_out_sleep_timer",
+            type = SettingType.BOOLEAN,
+            defaultValue = "true",
+            category = "Playback",
+            label = "Fade-Out Sleep Timer",
+            description = "Smoothly fade volume to zero over 15s when sleep timer ends."
+        ),
 
         // Advanced
+        SettingDefinition(
+            key = "has_completed_onboarding",
+            type = SettingType.BOOLEAN,
+            defaultValue = "false",
+            category = "Advanced",
+            label = "Onboarding Completed",
+            description = "Whether the first-time setup tour has completed.",
+            advanced = true
+        ),
         SettingDefinition(
             key = "custom_accent_color",
             type = SettingType.COLOR,
