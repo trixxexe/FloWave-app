@@ -7,12 +7,19 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -33,6 +40,7 @@ import com.example.flowave.diagnostics.FloWaveLogger
 import com.example.flowave.downloader.FloWaveDownloader
 import com.example.flowave.downloader.FloWaveDownloadService
 import com.example.flowave.ui.components.DynamicIslandWidget
+import com.example.flowave.ui.components.GlassCard
 import com.example.flowave.ui.components.MiniPlayer
 import com.example.flowave.ui.components.PermissionManager
 import com.example.flowave.ui.components.TagEditorDialog
@@ -94,6 +102,8 @@ fun MainScreen() {
 
     var showCrashReportDialog by remember { mutableStateOf(false) }
     var crashReportContent by remember { mutableStateOf("") }
+    var showOnboardingDialog by remember { mutableStateOf(false) }
+    var onboardingStep by remember { mutableIntStateOf(0) }
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Home, 1: Explore, 2: Library, 3: Downloader, 4: EQ DSP, 5: Profile
     var isPlayerExpanded by remember { mutableStateOf(false) }
@@ -286,6 +296,125 @@ fun MainScreen() {
 
         Scaffold(
             containerColor = Color.Transparent,
+            topBar = {
+                if (!isPlayerExpanded && selectedTab != 4 && selectedTab != 5) {
+                    Surface(
+                        color = DarkSurface.copy(alpha = 0.95f),
+                        contentColor = TextPrimary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Left: Logo branding
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { selectedTab = 0 }
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Brush.linearGradient(listOf(CyanNeon, PurpleNeon))),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("~", color = PureBlack, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("FloWave", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            }
+
+                            // Center: The Mode Toggle Switch (CloudOff on left vs Cloud on right)
+                            val isOnline = selectedTab == 1 || selectedTab == 3
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(DarkBackground)
+                                    .border(1.dp, GlassBorder, RoundedCornerShape(20.dp))
+                                    .padding(2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (!isOnline) CyanNeon else Color.Transparent,
+                                    contentColor = if (!isOnline) PureBlack else TextMuted,
+                                    modifier = Modifier.clickable { if (isOnline) selectedTab = 0 }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CloudOff,
+                                            contentDescription = "Offline Section",
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Offline", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (isOnline) CyanNeon else Color.Transparent,
+                                    contentColor = if (isOnline) PureBlack else TextMuted,
+                                    modifier = Modifier.clickable { if (!isOnline) selectedTab = 1 }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Cloud,
+                                            contentDescription = "Online Section",
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Online", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            // Right: Tour & Profile Icons
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = {
+                                        onboardingStep = 0
+                                        showOnboardingDialog = true
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.HelpOutline,
+                                        contentDescription = "App Tour",
+                                        tint = TextMuted,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { selectedTab = 5 },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Settings,
+                                        contentDescription = "Settings & Developer",
+                                        tint = CyanNeon,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             bottomBar = {
                 if (!isPlayerExpanded) {
                     Column(
@@ -741,6 +870,170 @@ fun MainScreen() {
                 },
                 containerColor = DarkSurface,
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp)
+            )
+        }
+
+        // Interactive Onboarding Tour Dialog
+        if (showOnboardingDialog) {
+            AlertDialog(
+                onDismissRequest = { showOnboardingDialog = false },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Brush.linearGradient(listOf(CyanNeon, PurpleNeon))),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("~", color = PureBlack, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                        }
+                        Text(
+                            text = when (onboardingStep) {
+                                0 -> "Welcome to FloWave"
+                                1 -> "Dual Engine: Offline & Online"
+                                else -> "Engineered by Ritam"
+                            },
+                            color = CyanNeon,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                    }
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        when (onboardingStep) {
+                            0 -> {
+                                Text(
+                                    "FloWave is an audiophile-grade dual-engine music workstation engineered for seamless offline hi-fi playback and limitless online streaming.",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text("Key Highlights:", color = CyanNeon, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text("• Top bar toggle for instant Offline / Online switching", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• 10-band hardware DSP Equalizer & Bass Boost", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Lossless InnerTube YouTube Music streaming & yt-dlp downloader", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Synchronized scrolling LRC lyrics display", color = TextPrimary, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                            1 -> {
+                                Text(
+                                    "Effortlessly switch modes using the top-bar pill toggle:",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(DarkBackground)
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.CloudOff, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(24.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Offline Mode (Cloud-Off)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("Zero placeholders. Hi-Res FLAC/MP3, Folders, Albums, Tag Editor, Smart Playlists.", color = TextMuted, fontSize = 10.sp)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(DarkBackground)
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Cloud, contentDescription = null, tint = PurpleNeon, modifier = Modifier.size(24.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Online Mode (Cloud)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("InnerTube client extraction, live chart rankings, YouTube Music streams & audio downloader.", color = TextMuted, fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                            else -> {
+                                Text(
+                                    "FloWave is designed and crafted by Ritam (@not_your_ritam & @ritam.localhost).",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text("Ritam's Developer Guarantee:", color = PinkNeon, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text("• 100% Free & Open-Source Core", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Zero tracking or intrusive telemetry", color = TextPrimary, fontSize = 11.sp)
+                                        Text("• Direct feedback & feature roadmap via Profile > Developer", color = TextPrimary, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        // Progress indicator dots
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            repeat(3) { index ->
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 4.dp)
+                                        .size(if (index == onboardingStep) 8.dp else 6.dp)
+                                        .clip(CircleShape)
+                                        .background(if (index == onboardingStep) CyanNeon else TextMuted.copy(alpha = 0.4f))
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (onboardingStep < 2) {
+                                onboardingStep++
+                            } else {
+                                showOnboardingDialog = false
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack)
+                    ) {
+                        Text(
+                            text = if (onboardingStep < 2) "Next" else "Get Started",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                },
+                dismissButton = {
+                    if (onboardingStep > 0) {
+                        TextButton(onClick = { onboardingStep-- }) {
+                            Text("Back", color = TextMuted)
+                        }
+                    } else {
+                        TextButton(onClick = { showOnboardingDialog = false }) {
+                            Text("Skip", color = TextMuted)
+                        }
+                    }
+                },
+                containerColor = DarkSurface,
+                shape = RoundedCornerShape(20.dp)
             )
         }
     }
