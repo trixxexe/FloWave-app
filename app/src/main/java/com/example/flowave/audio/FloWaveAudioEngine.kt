@@ -946,6 +946,7 @@ class FloWaveAudioEngine(private val context: Context) {
 
     fun cancelSleepTimer() {
         sleepTimerJob?.cancel()
+        exoPlayer?.volume = 1.0f
         _playbackState.value = _playbackState.value.copy(sleepTimerRemainingMs = 0L)
     }
 
