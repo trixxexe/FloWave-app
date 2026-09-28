@@ -155,7 +155,12 @@ class FloWaveDataSourceTest {
 
         assertFalse("Thread must have terminated after interruption", thread.isAlive)
         assertTrue("Interruption must result in IOException with cancelled status", interruptedThrew.get())
-        // In-flight resolution should have been cancelled
+        // Wait briefly for the cancelled background coroutine to finish its finally block
+        var waitInterruptedMs = 0
+        while (mockRepo.inFlightResolutions.containsKey("vid_hanging") && waitInterruptedMs < 1000) {
+            Thread.sleep(20)
+            waitInterruptedMs += 20
+        }
         assertFalse("Hung resolution must not remain in-flight", mockRepo.inFlightResolutions.containsKey("vid_hanging"))
     }
 
@@ -195,6 +200,11 @@ class FloWaveDataSourceTest {
         }.getOrDefault(false)
 
         assertFalse("Resolution must fail after close() cancels it", result)
+        var waitCloseMs = 0
+        while (mockRepo.inFlightResolutions.containsKey("vid_slow") && waitCloseMs < 1000) {
+            Thread.sleep(20)
+            waitCloseMs += 20
+        }
         assertFalse("Slow resolution must not remain in-flight after close()", mockRepo.inFlightResolutions.containsKey("vid_slow"))
         executor.shutdownNow()
     }
