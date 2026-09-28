@@ -21,6 +21,7 @@ object InnerTubeParser {
             if (contents != null) {
                 for (i in 0 until contents.length()) {
                     val section = contents.optJSONObject(i)?.optJSONObject("musicShelfRenderer")
+                        ?: contents.optJSONObject(i)?.optJSONObject("musicCardShelfRenderer")
                         ?: contents.optJSONObject(i)?.optJSONObject("itemSectionRenderer")
                         ?: continue
                     val items = section.optJSONArray("contents") ?: continue
@@ -37,6 +38,7 @@ object InnerTubeParser {
                         var title: String? = null
                         var artist: String? = null
                         var albumName = "YouTube Music"
+                        var durationText = "3:30"
 
                         // Try direct keys first
                         title = extractText(item, "title")
@@ -56,7 +58,7 @@ object InnerTubeParser {
                                 }
                             }
 
-                            // Column 1 is always subtitle / artist / album info
+                            // Column 1 is subtitle / artist / album info
                             if (flexColumns.length() > 1) {
                                 val col1 = flexColumns.optJSONObject(1)
                                     ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
@@ -64,14 +66,33 @@ object InnerTubeParser {
                                 if (textObj1 != null) {
                                     val runs = textObj1.optJSONArray("runs")
                                     if (runs != null && runs.length() > 0) {
-                                        val artistName = runs.optJSONObject(0)?.optString("text")
-                                        if (!artistName.isNullOrBlank()) {
-                                            artist = artistName
+                                        val runTexts = mutableListOf<String>()
+                                        for (r in 0 until runs.length()) {
+                                            val text = runs.optJSONObject(r)?.optString("text")?.trim().orEmpty()
+                                            if (text.isNotEmpty() && text != "•") {
+                                                runTexts.add(text)
+                                            }
                                         }
-                                        for (r in 1 until runs.length()) {
-                                            val runText = runs.optJSONObject(r)?.optString("text")
-                                            if (!runText.isNullOrBlank() && runText != "•" && !runText.contains(":") && runText.length > 1) {
-                                                albumName = runText
+                                        val meaningfulRuns = runTexts.filter { t ->
+                                            !t.equals("song", ignoreCase = true) &&
+                                            !t.equals("video", ignoreCase = true) &&
+                                            !t.equals("single", ignoreCase = true) &&
+                                            !t.equals("ep", ignoreCase = true) &&
+                                            !t.equals("album", ignoreCase = true) &&
+                                            !t.equals("podcast", ignoreCase = true) &&
+                                            !t.equals("episode", ignoreCase = true)
+                                        }
+                                        if (meaningfulRuns.isNotEmpty()) {
+                                            artist = meaningfulRuns[0]
+                                        }
+                                        if (meaningfulRuns.size > 1) {
+                                            if (meaningfulRuns.last().contains(":")) {
+                                                durationText = meaningfulRuns.last()
+                                                if (meaningfulRuns.size > 2) {
+                                                    albumName = meaningfulRuns[1]
+                                                }
+                                            } else {
+                                                albumName = meaningfulRuns[1]
                                             }
                                         }
                                     } else {
@@ -79,6 +100,19 @@ object InnerTubeParser {
                                         if (!simpleText.isNullOrBlank()) {
                                             artist = simpleText
                                         }
+                                    }
+                                }
+                            }
+
+                            // Column 2 can contain duration or play counts
+                            if (flexColumns.length() > 2) {
+                                val col2 = flexColumns.optJSONObject(2)
+                                    ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+                                val textObj2 = col2?.optJSONObject("text")
+                                if (textObj2 != null) {
+                                    val candidate = extractTextFromObj(textObj2)
+                                    if (!candidate.isNullOrBlank() && candidate.contains(":")) {
+                                        durationText = candidate
                                     }
                                 }
                             }
@@ -94,7 +128,7 @@ object InnerTubeParser {
                                 id = videoId,
                                 title = finalTitle,
                                 artist = finalArtist,
-                                durationText = "3:30",
+                                durationText = durationText,
                                 thumbnailUrl = highResThumbnail,
                                 album = albumName
                             )
@@ -247,6 +281,21 @@ object InnerTubeParser {
                 ?.optJSONObject("watchEndpoint")
                 ?.optString("videoId")
             if (titleNav != null && titleNav.isNotEmpty()) return titleNav
+        }
+
+        val flexCol0 = item.optJSONArray("flexColumns")?.optJSONObject(0)
+            ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+            ?.optJSONObject("text")?.optJSONArray("runs")?.optJSONObject(0)
+            ?.optJSONObject("navigationEndpoint")?.optJSONObject("watchEndpoint")?.optString("videoId")
+        if (!flexCol0.isNullOrEmpty()) return flexCol0
+
+        val menuItems = item.optJSONObject("menu")?.optJSONObject("menuRenderer")?.optJSONArray("items")
+        if (menuItems != null) {
+            for (m in 0 until menuItems.length()) {
+                val menuNav = menuItems.optJSONObject(m)?.optJSONObject("menuNavigationItemRenderer")
+                    ?.optJSONObject("navigationEndpoint")?.optJSONObject("watchEndpoint")?.optString("videoId")
+                if (!menuNav.isNullOrEmpty()) return menuNav
+            }
         }
 
         return ""

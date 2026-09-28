@@ -32,7 +32,7 @@ object FloWaveCacheManager {
     @Synchronized
     fun createCacheDataSourceFactory(context: Context): CacheDataSource.Factory {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+            .setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
             .setAllowCrossProtocolRedirects(true)
             .setDefaultRequestProperties(
                 mapOf(

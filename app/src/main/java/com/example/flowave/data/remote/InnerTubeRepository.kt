@@ -30,7 +30,12 @@ import kotlinx.coroutines.sync.withLock
 data class InnerTubeClientConfig(
     val clientName: String,
     val clientVersion: String,
-    val userAgent: String
+    val userAgent: String,
+    val deviceMake: String? = null,
+    val deviceModel: String? = null,
+    val osName: String? = null,
+    val osVersion: String? = null,
+    val androidSdkVersion: Int? = null
 )
 
 data class ResolvedStreamSource(
@@ -40,48 +45,40 @@ data class ResolvedStreamSource(
 )
 
 object InnerTubeClients {
-    val ANDROID_TESTSUITE = InnerTubeClientConfig(
-        clientName = "ANDROID_TESTSUITE",
-        clientVersion = "1.9",
-        userAgent = "com.google.android.youtube.testsuite/1.9 (Linux; U; Android 5.0.1; en_US; One Plus One Build/LRX22C)"
+    val ANDROID = InnerTubeClientConfig(
+        clientName = "ANDROID",
+        clientVersion = "20.10.38",
+        androidSdkVersion = 30,
+        userAgent = FloWaveConstants.USER_AGENT_ANDROID,
+        osName = "Android",
+        osVersion = "11"
     )
-    val ANDROID_EMBEDDED = InnerTubeClientConfig(
-        clientName = "ANDROID_EMBEDDED_PLAYER",
-        clientVersion = "19.30.36",
-        userAgent = "com.google.android.youtube.tv/19.30.36 (Linux; U; Android 12; en_US; Chromecast Build/STTE.220621.019)"
+    val IOS = InnerTubeClientConfig(
+        clientName = "IOS",
+        clientVersion = "20.10.4",
+        deviceMake = "Apple",
+        deviceModel = "iPhone16,2",
+        userAgent = FloWaveConstants.USER_AGENT_IOS,
+        osName = "iPhone",
+        osVersion = "18.3.2.22D82"
     )
     val ANDROID_VR = InnerTubeClientConfig(
         clientName = "ANDROID_VR",
-        clientVersion = "1.54.45",
-        userAgent = "Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/15.3.0.0.3.284240751 SamsungBrowser/4.0 Chrome/89.0.4389.90 VR Mobile Safari/537.36"
-    )
-    val ANDROID_MUSIC = InnerTubeClientConfig(
-        clientName = "ANDROID_MUSIC",
-        clientVersion = "7.03.52",
-        userAgent = "com.google.android.apps.youtube.music/7.03.52 (Linux; U; Android 13; US)"
+        clientVersion = "1.62.27",
+        deviceMake = "Oculus",
+        deviceModel = "Quest 3",
+        androidSdkVersion = 32,
+        userAgent = FloWaveConstants.USER_AGENT_ANDROID_VR,
+        osName = "Android",
+        osVersion = "12L"
     )
     val WEB_REMIX = InnerTubeClientConfig(
         clientName = "WEB_REMIX",
-        clientVersion = "1.20240216.07.00",
-        userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP
-    )
-    val WEB = InnerTubeClientConfig(
-        clientName = "WEB",
-        clientVersion = "2.20260114.00.00",
-        userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP
-    )
-    val TVHTML5_SIMPLY_EMBEDDED = InnerTubeClientConfig(
-        clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-        clientVersion = "2.0",
-        userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_TVHTML5
-    )
-    val WEB_EMBEDDED = InnerTubeClientConfig(
-        clientName = "WEB_EMBEDDED_PLAYER",
-        clientVersion = "1.20240125.01.00",
-        userAgent = com.example.flowave.utils.FloWaveConstants.USER_AGENT_WEB_EMBEDDED
+        clientVersion = "1.20250310.01.00",
+        userAgent = FloWaveConstants.USER_AGENT_DESKTOP
     )
 
-    val FALLBACK_CHAIN = listOf(ANDROID_EMBEDDED, ANDROID_TESTSUITE, ANDROID_VR, TVHTML5_SIMPLY_EMBEDDED, WEB_EMBEDDED, ANDROID_MUSIC, WEB_REMIX, WEB)
+    val FALLBACK_CHAIN = listOf(ANDROID, IOS, ANDROID_VR, WEB_REMIX)
 }
 
 open class InnerTubeRepository(context: Context? = null) {
@@ -383,7 +380,47 @@ open class InnerTubeRepository(context: Context? = null) {
         ensureKeysUpdated()
         val tracks = mutableListOf<InnerTubeTrack>()
 
-        // ENGINE 0: YouTube HTML Scraping (ytInitialData) - Extremely robust, zero-key, unfailing
+        // ENGINE 1: YouTube Music InnerTube POST Endpoint with Songs Filter (Primary, Fast & High Quality)
+        try {
+            val requestBodyJson = JSONObject().apply {
+                put("context", JSONObject().apply {
+                    put("client", JSONObject().apply {
+                        put("clientName", InnerTubeClients.WEB_REMIX.clientName)
+                        put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
+                        put("hl", "en")
+                        put("gl", "US")
+                    })
+                })
+                put("query", query)
+                put("params", "EgWKAQIIAWoKEAkQBRAKEAMQBBAK") // Filter for Songs
+            }
+
+            val request = Request.Builder()
+                .url(FloWaveConstants.INNERTUBE_SEARCH_URL)
+                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
+                .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
+                .header("Origin", "https://music.youtube.com")
+                .header("Referer", "https://music.youtube.com/")
+                .build()
+
+            executeWithRetry(request, maxRetries = 2).use { response ->
+                val bodyString = response.body?.string() ?: ""
+                if (response.isSuccessful && bodyString.isNotEmpty()) {
+                    val json = JSONObject(bodyString)
+                    val parsed = InnerTubeParser.parseInnerTubeSearchJson(json)
+                    tracks.addAll(parsed)
+                    if (parsed.isNotEmpty()) {
+                        android.util.Log.d("InnerTubeRepository", "Search results fetched from InnerTube Music Search for query: $query (${parsed.size} tracks)")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("InnerTubeRepository", "InnerTube music search notice: ${e.message}", e)
+        }
+
+        if (tracks.isNotEmpty()) return@withContext tracks
+
+        // ENGINE 0: YouTube HTML Scraping Fallback (ytInitialData)
         try {
             val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
             val searchUrl = "https://www.youtube.com/results?search_query=$encodedQuery&sp=EgIQAQ%253D%253D" // Filtered for videos
@@ -393,7 +430,7 @@ open class InnerTubeRepository(context: Context? = null) {
                 .header("Accept-Language", "en-US,en;q=0.9")
                 .build()
 
-            executeWithRetry(request).use { response ->
+            executeWithRetry(request, maxRetries = 2).use { response ->
                 val html = response.body?.string() ?: ""
                 if (html.isNotEmpty()) {
                     extractAndCacheKeys(html)
@@ -406,57 +443,15 @@ open class InnerTubeRepository(context: Context? = null) {
                             val scrapedTracks = InnerTubeParser.parseYtInitialData(json)
                             if (scrapedTracks.isNotEmpty()) {
                                 tracks.addAll(scrapedTracks)
-                            } else {
-                                android.util.Log.d("InnerTubeRepository", "Scraped tracks parsed empty from extracted ytInitialData JSON.")
                             }
                         } catch (je: org.json.JSONException) {
                             android.util.Log.e("InnerTubeRepository", "Extracted JSON string is malformed or invalid JSON syntax.", je)
                         }
                     }
-                } else {
-                    android.util.Log.w("InnerTubeRepository", "HTTP request to search scrape failed with code ${response.code} or empty response.")
                 }
             }
         } catch (e: Exception) {
             android.util.Log.e("InnerTubeRepository", "YouTube Scraper failed: ${e.message}", e)
-        }
-
-        if (tracks.isNotEmpty()) return@withContext tracks
-
-        // ENGINE 1: YouTube Music InnerTube POST Endpoint
-        try {
-            val requestBodyJson = JSONObject().apply {
-                put("context", JSONObject().apply {
-                    put("client", JSONObject().apply {
-                        put("clientName", InnerTubeClients.WEB_REMIX.clientName)
-                        put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
-                        put("hl", "en")
-                        put("gl", "US")
-                    })
-                })
-                put("query", query)
-            }
-
-            val request = Request.Builder()
-                .url(FloWaveConstants.INNERTUBE_SEARCH_URL)
-                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
-                .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
-                .header("Origin", "https://music.youtube.com")
-                .build()
-
-            val response = executeWithRetry(request)
-            val bodyString = response.body?.string() ?: ""
-            if (response.isSuccessful && bodyString.isNotEmpty()) {
-                val json = JSONObject(bodyString)
-                val parsed = InnerTubeParser.parseInnerTubeSearchJson(json)
-                tracks.addAll(parsed)
-                if (parsed.isNotEmpty()) {
-                    android.util.Log.d("InnerTubeRepository", "Search results fetched from Engine 1 (Official InnerTube Search) for query: $query")
-                }
-            }
-            response.close()
-        } catch (e: Exception) {
-            android.util.Log.w("InnerTubeRepository", "InnerTube search failed: ${e.message}", e)
         }
 
         if (tracks.isNotEmpty()) return@withContext tracks
@@ -563,40 +558,46 @@ open class InnerTubeRepository(context: Context? = null) {
     }
 
     suspend fun getTrackMetadata(videoId: String): InnerTubeTrack? = withContext(Dispatchers.IO) {
-        ensureKeysUpdated()
         for (clientConfig in InnerTubeClients.FALLBACK_CHAIN) {
             try {
+                val clientJson = JSONObject().apply {
+                    put("clientName", clientConfig.clientName)
+                    put("clientVersion", clientConfig.clientVersion)
+                    clientConfig.deviceMake?.let { put("deviceMake", it) }
+                    clientConfig.deviceModel?.let { put("deviceModel", it) }
+                    clientConfig.osName?.let { put("osName", it) }
+                    clientConfig.osVersion?.let { put("osVersion", it) }
+                    clientConfig.androidSdkVersion?.let { put("androidSdkVersion", it) }
+                    put("hl", "en")
+                    put("gl", "US")
+                }
                 val requestBodyJson = JSONObject().apply {
                     put("context", JSONObject().apply {
-                        put("client", JSONObject().apply {
-                            put("clientName", clientConfig.clientName)
-                            val version = if (!scrapedClientVersion.isNullOrBlank() && (clientConfig.clientName.contains("WEB") || clientConfig.clientName.contains("TV"))) {
-                                scrapedClientVersion ?: clientConfig.clientVersion
-                            } else {
-                                clientConfig.clientVersion
-                            }
-                            put("clientVersion", version)
-                            put("hl", "en")
-                            put("gl", "US")
-                        })
+                        put("client", clientJson)
                     })
                     put("videoId", videoId)
+                    put("contentCheckOk", true)
+                    put("racyCheckOk", true)
                 }
 
-                val apiKey = if (clientConfig.clientName.contains("MUSIC") || clientConfig.clientName.contains("ANDROID")) {
-                    com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_MUSIC
+                val playerUrl = if (clientConfig.clientName.contains("WEB")) {
+                    "https://www.youtube.com/youtubei/v1/player?key=${FloWaveConstants.INNERTUBE_KEY_WEB}&prettyPrint=false"
                 } else {
-                    scrapedApiKey ?: com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_WEB
+                    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
                 }
-                val playerUrl = "https://www.youtube.com/youtubei/v1/player?key=$apiKey"
 
-                val request = Request.Builder()
+                val reqBuilder = Request.Builder()
                     .url(playerUrl)
                     .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
                     .header("User-Agent", clientConfig.userAgent)
-                    .build()
+                    .header("Content-Type", "application/json")
 
-                executeWithRetry(request, maxRetries = 2).use { response ->
+                if (clientConfig.clientName.contains("WEB")) {
+                    reqBuilder.header("Origin", "https://music.youtube.com")
+                    reqBuilder.header("Referer", "https://music.youtube.com/")
+                }
+
+                executeWithRetry(reqBuilder.build(), maxRetries = 1).use { response ->
                     val bodyString = response.body?.string() ?: ""
                     if (response.isSuccessful && bodyString.isNotEmpty()) {
                         val json = JSONObject(bodyString)
@@ -724,45 +725,47 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        ensureKeysUpdated()
-
-        // Multi-Client Fallback Chain: ANDROID_MUSIC -> WEB_REMIX -> TVHTML5_SIMPLY_EMBEDDED
-        for ((attempt, clientConfig) in InnerTubeClients.FALLBACK_CHAIN.take(4).withIndex()) {
+        // Multi-Client Fallback Chain: ANDROID -> IOS -> ANDROID_VR -> WEB_REMIX
+        for ((attempt, clientConfig) in InnerTubeClients.FALLBACK_CHAIN.withIndex()) {
             try {
+                val clientJson = JSONObject().apply {
+                    put("clientName", clientConfig.clientName)
+                    put("clientVersion", clientConfig.clientVersion)
+                    clientConfig.deviceMake?.let { put("deviceMake", it) }
+                    clientConfig.deviceModel?.let { put("deviceModel", it) }
+                    clientConfig.osName?.let { put("osName", it) }
+                    clientConfig.osVersion?.let { put("osVersion", it) }
+                    clientConfig.androidSdkVersion?.let { put("androidSdkVersion", it) }
+                    put("hl", "en")
+                    put("gl", "US")
+                }
                 val requestBodyJson = JSONObject().apply {
                     put("context", JSONObject().apply {
-                        put("client", JSONObject().apply {
-                            put("clientName", clientConfig.clientName)
-                            val version = if (!scrapedClientVersion.isNullOrBlank() && (clientConfig.clientName.contains("WEB") || clientConfig.clientName.contains("TV"))) {
-                                scrapedClientVersion ?: clientConfig.clientVersion
-                            } else {
-                                clientConfig.clientVersion
-                            }
-                            put("clientVersion", version)
-                            put("hl", "en")
-                            put("gl", "US")
-                        })
+                        put("client", clientJson)
                     })
                     put("videoId", videoId)
-                    // These flags are required by current player clients and
-                    // are also used by Velune's InnerTube request model.
                     put("contentCheckOk", true)
                     put("racyCheckOk", true)
                 }
 
-                val apiKey = if (clientConfig.clientName.contains("MUSIC") || clientConfig.clientName.contains("ANDROID")) {
-                    scrapedApiKey?.takeIf { scrapedClientVersion?.contains("MUSIC", ignoreCase = true) == true }
-                        ?: com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_MUSIC
+                val playerUrl = if (clientConfig.clientName.contains("WEB")) {
+                    "https://www.youtube.com/youtubei/v1/player?key=${FloWaveConstants.INNERTUBE_KEY_WEB}&prettyPrint=false"
                 } else {
-                    scrapedApiKey ?: com.example.flowave.utils.FloWaveConstants.INNERTUBE_KEY_WEB
+                    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
                 }
-                val playerUrl = "https://www.youtube.com/youtubei/v1/player?key=$apiKey"
 
-                val request = Request.Builder()
+                val reqBuilder = Request.Builder()
                     .url(playerUrl)
                     .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
                     .header("User-Agent", clientConfig.userAgent)
-                    .build()
+                    .header("Content-Type", "application/json")
+
+                if (clientConfig.clientName.contains("WEB")) {
+                    reqBuilder.header("Origin", "https://music.youtube.com")
+                    reqBuilder.header("Referer", "https://music.youtube.com/")
+                }
+
+                val request = reqBuilder.build()
 
                 executeWithRetry(request, maxRetries = 1).use { response ->
                     val bodyString = response.body?.string() ?: ""

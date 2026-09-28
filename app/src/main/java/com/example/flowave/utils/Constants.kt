@@ -3,6 +3,9 @@ package com.example.flowave.utils
 object FloWaveConstants {
     const val USER_AGENT_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     const val USER_AGENT_MOBILE = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    const val USER_AGENT_ANDROID = "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip"
+    const val USER_AGENT_IOS = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)"
+    const val USER_AGENT_ANDROID_VR = "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
     const val USER_AGENT_ANDROID_MUSIC = "com.google.android.apps.youtube.music/6.25.52 (Linux; U; Android 13; US)"
     const val USER_AGENT_TVHTML5 = "Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebkit/538.1"
     const val USER_AGENT_WEB_EMBEDDED = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
