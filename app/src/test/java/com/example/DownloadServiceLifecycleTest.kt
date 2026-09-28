@@ -3,6 +3,7 @@ package com.example
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -47,7 +48,7 @@ class DownloadServiceLifecycleTest {
             val taskId = "task_$startId"
             taskStatus[taskId] = "DOWNLOADING"
 
-            val job = scope.launch {
+            val job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 try {
                     taskDeferred.await()
                     taskStatus[taskId] = "DONE"

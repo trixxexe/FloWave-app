@@ -329,7 +329,7 @@ fun ProfileScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         // Render dynamic categories
-        val categories = listOf("Audio", "Playback", "Appearance")
+        val categories = listOf("Audio", "Playback", "Library", "Appearance")
         categories.forEach { category ->
             val defs = SettingsSchema.DEFINITIONS.filter { it.category == category }
             if (defs.isNotEmpty()) {
