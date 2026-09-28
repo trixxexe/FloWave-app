@@ -1,6 +1,6 @@
 package com.example
 
-import com.example.flowave.data.model.DownloadMediaInfo
+import com.example.flowave.downloader.DownloadMediaInfo
 import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.Track
 import com.example.flowave.data.remote.InnerTubeRepository
