@@ -203,7 +203,7 @@ fun MainScreen() {
             runCatching {
                 withTimeoutOrNull(10_000L) {
                     innerTubeRepo.ensureKeysUpdated()
-                    innerTubeRepo.getFeaturedAudioStreams()
+                    innerTubeRepo.getTrendingTracks()
                 } ?: emptyList()
             }.onSuccess { featuredOnlineTracks = it }
                 .onFailure { android.util.Log.d("MainScreen", "Online discovery unavailable", it) }

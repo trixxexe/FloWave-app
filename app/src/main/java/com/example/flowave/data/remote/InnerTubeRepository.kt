@@ -688,29 +688,7 @@ open class InnerTubeRepository(context: Context? = null) {
         if (forceRefresh) {
             streamUrlCache.remove(videoId)
         }
-        // Direct local stream definitions for featured audio items resolved dynamically to actual streams
-        when (videoId) {
-            "synthwave_pulse", "chill_lofi", "ambient_space", "electronic_beat" -> {
-                val queryText = when (videoId) {
-                    "synthwave_pulse" -> "Midnight Cyber Pulse Neon Wave"
-                    "chill_lofi" -> "Acoustic Rain Echoes LoFi Chill Studio"
-                    "ambient_space" -> "Starlight Continuum Aether Void"
-                    "electronic_beat" -> "Hyperdrive Resonance Quantum Bass"
-                    else -> ""
-                }
-                android.util.Log.d("InnerTubeRepository", "Dynamically resolving featured stream: $videoId using search query '$queryText'")
-                try {
-                    val resolvedTracks = searchTracks(queryText)
-                    if (resolvedTracks.isNotEmpty()) {
-                        val realVideoId = resolvedTracks.first().id
-                        android.util.Log.d("InnerTubeRepository", "Resolved featured track $videoId to YouTube video ID: $realVideoId")
-                        return@withContext getStreamUrlInternal(realVideoId, forceRefresh)
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("InnerTubeRepository", "Failed to dynamically resolve featured track $videoId: ${e.message}", e)
-                }
-            }
-        }
+
 
         // Check cache first (valid for 30 minutes)
         val cached = streamUrlCache[videoId]
@@ -1176,41 +1154,18 @@ open class InnerTubeRepository(context: Context? = null) {
         return null
     }
 
-    fun getFeaturedAudioStreams(): List<InnerTubeTrack> {
-        return listOf(
-            InnerTubeTrack(
-                id = "synthwave_pulse",
-                title = "Midnight Cyber Pulse",
-                artist = "Neon Wave",
-                durationText = "6:12",
-                thumbnailUrl = "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=600",
-                album = "Neon Horizon"
-            ),
-            InnerTubeTrack(
-                id = "chill_lofi",
-                title = "Acoustic Rain Echoes",
-                artist = "LoFi Chill Studio",
-                durationText = "7:04",
-                thumbnailUrl = "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=600",
-                album = "Midnight Rain"
-            ),
-            InnerTubeTrack(
-                id = "ambient_space",
-                title = "Starlight Continuum",
-                artist = "Aether Void",
-                durationText = "5:45",
-                thumbnailUrl = "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=600",
-                album = "Cosmic Journey"
-            ),
-            InnerTubeTrack(
-                id = "electronic_beat",
-                title = "Hyperdrive Resonance",
-                artist = "Quantum Bass",
-                durationText = "4:50",
-                thumbnailUrl = "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?q=80&w=600",
-                album = "Cybernetic Beats"
-            )
-        )
+    suspend fun getTrendingTracks(): List<InnerTubeTrack> {
+        return try {
+            val tracks = searchTracks("Top Global Hits Music 2026")
+            if (tracks.isNotEmpty()) {
+                tracks.take(15)
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("InnerTubeRepository", "Failed to fetch trending tracks", e)
+            emptyList()
+        }
     }
 
     private fun extractAndCacheKeys(html: String) {
