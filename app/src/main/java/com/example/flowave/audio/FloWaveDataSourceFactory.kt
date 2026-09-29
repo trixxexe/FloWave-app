@@ -57,13 +57,6 @@ class FloWaveDataSourceFactory(
             .build()
 
         return OkHttpDataSource.Factory(streamClient)
-            .setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
-            .setDefaultRequestProperties(
-                mapOf(
-                    "Referer" to "https://www.youtube.com/",
-                    "Origin" to "https://www.youtube.com"
-                )
-            )
             .createDataSource()
     }
 

@@ -45,40 +45,36 @@ data class ResolvedStreamSource(
 )
 
 object InnerTubeClients {
-    val ANDROID = InnerTubeClientConfig(
-        clientName = "ANDROID",
-        clientVersion = "20.10.38",
+    val ANDROID_MUSIC = InnerTubeClientConfig(
+        clientName = "ANDROID_MUSIC",
+        clientVersion = "5.01",
         androidSdkVersion = 30,
-        userAgent = FloWaveConstants.USER_AGENT_ANDROID,
+        userAgent = FloWaveConstants.USER_AGENT_ANDROID_MUSIC,
         osName = "Android",
         osVersion = "11"
     )
-    val IOS = InnerTubeClientConfig(
+    val IOS_MUSIC = InnerTubeClientConfig(
         clientName = "IOS",
-        clientVersion = "20.10.4",
+        clientVersion = "19.29.1",
         deviceMake = "Apple",
-        deviceModel = "iPhone16,2",
+        deviceModel = "iPhone15,2",
         userAgent = FloWaveConstants.USER_AGENT_IOS,
         osName = "iPhone",
-        osVersion = "18.3.2.22D82"
+        osVersion = "16.4"
     )
-    val ANDROID_VR = InnerTubeClientConfig(
-        clientName = "ANDROID_VR",
-        clientVersion = "1.62.27",
-        deviceMake = "Oculus",
-        deviceModel = "Quest 3",
-        androidSdkVersion = 32,
-        userAgent = FloWaveConstants.USER_AGENT_ANDROID_VR,
-        osName = "Android",
-        osVersion = "12L"
+    val TVHTML5_SIMPLY_EMBEDDED_PLAYER = InnerTubeClientConfig(
+        clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+        clientVersion = "2.0",
+        userAgent = FloWaveConstants.USER_AGENT_TVHTML5
     )
     val WEB_REMIX = InnerTubeClientConfig(
         clientName = "WEB_REMIX",
-        clientVersion = "1.20250310.01.00",
+        clientVersion = "1.20250122.01.00",
         userAgent = FloWaveConstants.USER_AGENT_DESKTOP
     )
 
-    val FALLBACK_CHAIN = listOf(ANDROID, IOS, ANDROID_VR, WEB_REMIX)
+    // Using exact client hierarchy proven to bypass current anti-bot restrictions locally
+    val FALLBACK_CHAIN = listOf(ANDROID_MUSIC, IOS_MUSIC, TVHTML5_SIMPLY_EMBEDDED_PLAYER, WEB_REMIX)
 }
 
 open class InnerTubeRepository(context: Context? = null) {
@@ -771,7 +767,7 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        // 2. InnerTube Multi-Client Fallback Chain: ANDROID -> IOS -> ANDROID_VR -> WEB_REMIX
+        // 2. InnerTube Multi-Client Fallback Chain: Native FOSS Direct Extraction
         for ((attempt, clientConfig) in InnerTubeClients.FALLBACK_CHAIN.withIndex()) {
             try {
                 val clientJson = JSONObject().apply {
@@ -788,6 +784,13 @@ open class InnerTubeRepository(context: Context? = null) {
                 val requestBodyJson = JSONObject().apply {
                     put("context", JSONObject().apply {
                         put("client", clientJson)
+                        put("clientScreen", "MOBILE")
+                    })
+                    put("playbackContext", JSONObject().apply {
+                        put("contentPlaybackContext", JSONObject().apply {
+                            put("signatureTimestamp", 20110)
+                            put("html5Preference", "HTML5_PREF_WANTS")
+                        })
                     })
                     put("videoId", videoId)
                     put("contentCheckOk", true)

@@ -111,3 +111,10 @@
 -keep class androidx.compose.** { *; }
 -keep class androidx.lifecycle.** { *; }
 -dontwarn androidx.lifecycle.**
+-keep class com.yausername.** { *; }
+-dontwarn com.yausername.**
+-keep class com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.** { *; }
+-dontwarn com.sun.jna.**
+-keep class com.fasterxml.jackson.** { *; }
+-dontwarn com.fasterxml.jackson.**
