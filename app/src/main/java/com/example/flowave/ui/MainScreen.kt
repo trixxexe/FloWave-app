@@ -89,7 +89,8 @@ fun MainScreen() {
     val totalPlayCount by repository.totalPlayCount.collectAsStateWithLifecycle(initialValue = 0)
     val downloadEntries by downloader.allDownloadEntries.collectAsStateWithLifecycle(initialValue = emptyList())
     val userProfile by profileRepo.userProfile.collectAsStateWithLifecycle(initialValue = UserProfile())
-    val settingsJson by profileRepo.settingsJson.collectAsStateWithLifecycle(initialValue = SettingsSchema.getDefaultJson())
+    val settingsJsonNullable by profileRepo.settingsJson.collectAsStateWithLifecycle(initialValue = null)
+    val settingsJson = settingsJsonNullable ?: SettingsSchema.getDefaultJson()
     val diagnosticEntries by diagnostics.entries.collectAsStateWithLifecycle(initialValue = emptyList())
 
     var featuredOnlineTracks by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
@@ -102,8 +103,12 @@ fun MainScreen() {
 
     var showCrashReportDialog by remember { mutableStateOf(false) }
     var crashReportContent by remember { mutableStateOf("") }
-    val hasCompletedOnboarding = remember(settingsJson) {
-        SettingsSchema.getBoolean(settingsJson, "has_completed_onboarding")
+    val hasCompletedOnboarding = remember(settingsJsonNullable) {
+        if (settingsJsonNullable == null) {
+            true // Prevent showing dialog while DataStore is loading
+        } else {
+            SettingsSchema.getBoolean(settingsJsonNullable, "has_completed_onboarding")
+        }
     }
     var showOnboardingDialog by remember { mutableStateOf(false) }
     var onboardingStep by remember { mutableIntStateOf(0) }
