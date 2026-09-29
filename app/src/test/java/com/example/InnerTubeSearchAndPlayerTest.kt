@@ -30,7 +30,7 @@ class InnerTubeSearchAndPlayerTest {
         }
 
         // Verify Android client context completeness
-        val android = chain.first { it.clientName == "ANDROID" }
+        val android = chain.first { it.clientName == "ANDROID_MUSIC" }
         assertEquals(30, android.androidSdkVersion)
         assertEquals("Android", android.osName)
         assertEquals("11", android.osVersion)
@@ -38,7 +38,7 @@ class InnerTubeSearchAndPlayerTest {
         // Verify iOS client context completeness
         val ios = chain.first { it.clientName == "IOS" }
         assertEquals("Apple", ios.deviceMake)
-        assertEquals("iPhone16,2", ios.deviceModel)
+        assertEquals("iPhone15,2", ios.deviceModel)
         assertEquals("iPhone", ios.osName)
     }
 
