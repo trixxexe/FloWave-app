@@ -104,10 +104,11 @@ fun MainScreen() {
     var showCrashReportDialog by remember { mutableStateOf(false) }
     var crashReportContent by remember { mutableStateOf("") }
     val hasCompletedOnboarding = remember(settingsJsonNullable) {
-        if (settingsJsonNullable == null) {
+        val currentJson = settingsJsonNullable
+        if (currentJson == null) {
             true // Prevent showing dialog while DataStore is loading
         } else {
-            SettingsSchema.getBoolean(settingsJsonNullable, "has_completed_onboarding")
+            SettingsSchema.getBoolean(currentJson, "has_completed_onboarding")
         }
     }
     var showOnboardingDialog by remember { mutableStateOf(false) }
