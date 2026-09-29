@@ -685,11 +685,20 @@ class FloWaveAudioEngine(private val context: Context) {
         } else {
             Uri.parse(uriStr)
         }
-        return MediaItem.Builder()
+        val builder = MediaItem.Builder()
             .setUri(parsedUri)
             .setMediaId(track.id)
             .setMediaMetadata(metadataBuilder.build())
-            .build()
+
+        // For online tracks using the custom flowave:// scheme, Media3 cannot
+        // infer the content type from the URI alone. Setting a MIME type hint
+        // tells DefaultMediaSourceFactory to use a ProgressiveMediaSource with
+        // the correct extractor instead of failing on scheme detection.
+        if (track.isOnline) {
+            builder.setMimeType(androidx.media3.common.MimeTypes.AUDIO_MP4)
+        }
+
+        return builder.build()
     }
 
     fun setQueueAndPlay(queue: List<Track>, startIndex: Int = 0) {
