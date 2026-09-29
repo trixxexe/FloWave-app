@@ -2,6 +2,10 @@
 # FloWave ProGuard / R8 Rules
 # ============================================================
 
+# Disable class renaming (obfuscation) while keeping shrinking enabled
+# This completely prevents "class e8 is not a concrete class" errors in JNA and yt-dlp reflection
+-dontobfuscate
+
 # Preserve source file names and line numbers for crash reports
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
