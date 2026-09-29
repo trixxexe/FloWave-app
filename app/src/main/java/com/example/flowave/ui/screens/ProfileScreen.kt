@@ -714,13 +714,13 @@ fun ProfileScreen(
                 Text("Core Developers & Creators", color = CyanNeon, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Developer 1: not_your_ritam
+                // Developer 1: ritam.zip
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .background(DarkSurface)
-                        .clickable { openInstagram("not_your_ritam") }
+                        .clickable { openInstagram("ritam.zip") }
                         .padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -730,11 +730,11 @@ fun ProfileScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text("Ritam", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            Text("@not_your_ritam", color = TextMuted, fontSize = 11.sp)
+                            Text("@ritam.zip", color = TextMuted, fontSize = 11.sp)
                         }
                     }
                     Button(
-                        onClick = { openInstagram("not_your_ritam") },
+                        onClick = { openInstagram("ritam.zip") },
                         colors = ButtonDefaults.buttonColors(containerColor = CyanNeon.copy(alpha = 0.15f), contentColor = CyanNeon),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         shape = RoundedCornerShape(8.dp)

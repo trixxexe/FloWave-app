@@ -9,6 +9,7 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.data.remote.ResolvedStreamSource
 import com.example.flowave.diagnostics.FloWaveLogger
@@ -18,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import okhttp3.OkHttpClient
 import java.io.IOException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
@@ -34,6 +36,36 @@ class FloWaveDataSourceFactory(
     private val defaultDataSourceFactory = DefaultDataSource.Factory(context)
     private val logger = FloWaveLogger.getInstance(context)
     private val resolutionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Creates a dedicated OkHttpDataSource for fetching the resolved YouTube
+     * stream URL. This bypasses the cache layer for the initial request,
+     * avoiding CacheDataSource header-forwarding issues while still being
+     * able to read from cache on subsequent requests.
+     *
+     * YouTube CDN requires:
+     * 1. User-Agent matching the client that resolved the URL
+     * 2. Valid Referer/Origin headers
+     * 3. Proper redirect following
+     */
+    private fun createStreamDataSource(): OkHttpDataSource {
+        val streamClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+
+        return OkHttpDataSource.Factory(streamClient)
+            .setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
+            .setDefaultRequestProperties(
+                mapOf(
+                    "Referer" to "https://www.youtube.com/",
+                    "Origin" to "https://www.youtube.com"
+                )
+            )
+            .createDataSource()
+    }
 
     override fun createDataSource(): DataSource {
         val cacheDataSource = cacheDataSourceFactory.createDataSource()
@@ -115,14 +147,23 @@ class FloWaveDataSourceFactory(
                     if (resolution.url.isBlank() || !resolution.url.startsWith("http")) {
                         throw java.io.IOException("Online stream resolver returned an invalid URL")
                     }
-                    activeDataSource = cacheDataSource
+
+                    // Use a dedicated OkHttpDataSource for YouTube streams.
+                    // This avoids CacheDataSource wrapping issues where
+                    // getResponseHeaders() returns empty maps and YouTube CDN
+                    // responses are not properly handled. The stream will still
+                    // benefit from OkHttp's connection pooling and proper
+                    // redirect following.
+                    val streamDataSource = createStreamDataSource()
+                    activeDataSource = streamDataSource
+
                     val resolvedSpec = dataSpec.buildUpon()
                         .setUri(Uri.parse(resolution.url))
                         .setKey(videoId)
                         .build()
                     val openStartedAt = System.nanoTime()
                     val openedLength = try {
-                        activeDataSource?.open(resolvedSpec) ?: -1L
+                        streamDataSource.open(resolvedSpec)
                     } catch (error: Exception) {
                         val cancelled = error is InterruptedException || error is kotlinx.coroutines.CancellationException
                         val httpStatus = (error as? HttpDataSource.InvalidResponseCodeException)?.responseCode
@@ -152,7 +193,9 @@ class FloWaveDataSourceFactory(
                         }
                         throw error
                     }
-                    val headers = activeDataSource?.responseHeaders.orEmpty()
+
+                    // OkHttpDataSource properly exposes response headers
+                    val headers = streamDataSource.responseHeaders
                     val contentType = headers.entries
                         .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
                         ?.value?.firstOrNull()
@@ -168,7 +211,7 @@ class FloWaveDataSourceFactory(
                     logger.info("online", "stream_open_response", context = mapOf(
                         "videoId" to videoId,
                         "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
-                        "contentEncoding" to activeDataSource?.responseHeaders.orEmpty().entries
+                        "contentEncoding" to headers.entries
                             .firstOrNull { it.key.equals("Content-Encoding", ignoreCase = true) }
                             ?.value?.firstOrNull().orEmpty().take(32),
                         "contentLength" to (contentLength ?: openedLength.toString()),
@@ -177,10 +220,10 @@ class FloWaveDataSourceFactory(
                         "openedLength" to openedLength,
                         "urlHost" to resolvedSpec.uri.host.orEmpty(),
                         "urlPath" to resolvedSpec.uri.path.orEmpty().take(80),
-                        "finalHost" to activeDataSource?.uri?.host.orEmpty()
+                        "finalHost" to streamDataSource.uri?.host.orEmpty()
                     ))
                     if (!com.example.flowave.data.remote.ResolverStreamSelector.isPlayableResponseContentType(contentType)) {
-                        activeDataSource?.close()
+                        streamDataSource.close()
                         activeDataSource = null
                         streamRepository.markUnplayableStream(videoId, "media_open_failure")
                         streamRepository.invalidateStreamUrl(videoId)

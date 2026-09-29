@@ -43,6 +43,8 @@ object FloWaveConstants {
     val PIPED_STREAM_INSTANCES = listOf(
         "https://pipedapi.kavin.rocks/streams/",
         "https://pipedapi.leptons.xyz/streams/",
-        "https://pipedapi.nosebs.ru/streams/"
+        "https://pipedapi.nosebs.ru/streams/",
+        "https://api.piped.video/streams/",
+        "https://pipedapi.mha.fi/streams/"
     )
 }

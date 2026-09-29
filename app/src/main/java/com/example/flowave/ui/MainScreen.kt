@@ -1142,7 +1142,7 @@ fun MainScreen() {
                             }
                             else -> {
                                 Text(
-                                    "FloWave is designed and crafted by Ritam (@not_your_ritam & @ritam.localhost).",
+                                    "FloWave is designed and crafted by Ritam (@ritam.zip & @ritam.localhost).",
                                     color = TextPrimary,
                                     fontSize = 13.sp,
                                     lineHeight = 18.sp

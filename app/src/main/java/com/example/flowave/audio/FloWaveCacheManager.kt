@@ -5,11 +5,13 @@ import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import okhttp3.OkHttpClient
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 @OptIn(UnstableApi::class)
 object FloWaveCacheManager {
@@ -29,11 +31,26 @@ object FloWaveCacheManager {
         return cacheInstance ?: throw IllegalStateException("Cache failed to initialize")
     }
 
+    /**
+     * Creates a CacheDataSource.Factory using OkHttpDataSource as the upstream
+     * HTTP source. This matches how InnerTune, ViMusic and other working
+     * YouTube Music clients configure their Media3 pipeline.
+     *
+     * OkHttpDataSource handles YouTube CDN responses (redirects, partial
+     * content, chunked transfer, connection reuse) more reliably than
+     * DefaultHttpDataSource which uses HttpURLConnection.
+     */
     @Synchronized
     fun createCacheDataSourceFactory(context: Context): CacheDataSource.Factory {
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        val streamClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+
+        val okHttpDataSourceFactory = OkHttpDataSource.Factory(streamClient)
             .setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
-            .setAllowCrossProtocolRedirects(true)
             .setDefaultRequestProperties(
                 mapOf(
                     "Referer" to "https://www.youtube.com/",
@@ -41,7 +58,7 @@ object FloWaveCacheManager {
                 )
             )
 
-        val upstreamFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
+        val upstreamFactory = DefaultDataSource.Factory(context, okHttpDataSourceFactory)
 
         return CacheDataSource.Factory()
             .setCache(getCache(context))

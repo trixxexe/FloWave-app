@@ -712,7 +712,7 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        // Check cache first (valid for 2 hours)
+        // Check cache first (valid for 30 minutes)
         val cached = streamUrlCache[videoId]
         if (cached != null) {
             val expired = isStreamUrlExpired(cached.second) || (System.currentTimeMillis() - cached.first) >= FloWaveConstants.STREAM_CACHE_DURATION_MS
@@ -725,7 +725,75 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        // Multi-Client Fallback Chain: ANDROID -> IOS -> ANDROID_VR -> WEB_REMIX
+        // STRATEGY: Try Piped first (returns pre-resolved working URLs), then
+        // InnerTube direct (which may require po_token/DroidGuard attestation
+        // that third-party apps cannot provide), then Invidious, then yt-dlp.
+
+        // 1. Piped Public API Fallback Stream Extraction (PRIMARY)
+        for ((attempt, candidate) in preferredCandidates(ResolverType.PIPED, System.currentTimeMillis()).take(4).withIndex()) {
+            val host = candidate.host
+            val instance = candidate.endpoint()
+            val startedAtNs = System.nanoTime()
+            try {
+                val request = Request.Builder()
+                    .url("$instance$videoId")
+                    .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
+                    .build()
+                fastClient.newCall(request).execute().use { response ->
+                    val bodyString = response.body?.string() ?: ""
+                    if (response.isSuccessful && bodyString.isNotEmpty()) {
+                        val json = JSONObject(bodyString)
+                        val selected = ResolverStreamSelector.selectPiped(json)
+                        if (selected != null) {
+                                logger?.info("online", "piped_stream_selected", context = mapOf(
+                                    "videoId" to videoId,
+                                    "host" to host,
+                                    "attempt" to attempt + 1,
+                                    "mimeType" to selected.mimeType,
+                                    "container" to selected.container,
+                                    "codec" to selected.codec,
+                                    "bitrate" to selected.bitrate,
+                                    "contentLength" to selected.contentLength,
+                                    "audioOnly" to selected.audioOnly,
+                                    "playableValidation" to false,
+                                    "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
+                                ))
+                                selectedFallbackSources[videoId] = candidate
+                                streamUrlCache[videoId] = Pair(System.currentTimeMillis(), selected.url)
+
+                                // Also cache duration from Piped response
+                                val durationSec = json.optLong("duration", 0L)
+                                if (durationSec > 0L) {
+                                    streamDurationCache[videoId] = durationSec * 1000L
+                                }
+
+                                return@withContext selected.url
+                        }
+                    }
+                    recordFallbackFailure(
+                        videoId = videoId,
+                        resolver = "piped",
+                        candidate = candidate,
+                        attempt = attempt + 1,
+                        startedAtNs = startedAtNs,
+                        status = response.code.takeIf { !response.isSuccessful },
+                        error = IOException("Piped response contained no usable audio stream"),
+                        failureClassOverride = if (response.isSuccessful) "extraction_failure" else null,
+                        penalizeHost = response.isSuccessful.not(),
+                        retryAfterHeader = response.header("Retry-After")
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw e
+            } catch (e: Exception) {
+                recordFallbackFailure(videoId, "piped", candidate, attempt + 1, startedAtNs, error = e)
+            }
+        }
+
+        // 2. InnerTube Multi-Client Fallback Chain: ANDROID -> IOS -> ANDROID_VR -> WEB_REMIX
         for ((attempt, clientConfig) in InnerTubeClients.FALLBACK_CHAIN.withIndex()) {
             try {
                 val clientJson = JSONObject().apply {
@@ -771,22 +839,36 @@ open class InnerTubeRepository(context: Context? = null) {
                     val bodyString = response.body?.string() ?: ""
                     if (response.isSuccessful && bodyString.isNotEmpty()) {
                         val json = JSONObject(bodyString)
-                        val streamingData = json.optJSONObject("streamingData")
-                        val adaptiveFormats = streamingData?.optJSONArray("adaptiveFormats")
-                            ?: streamingData?.optJSONArray("formats")
 
-                        if (adaptiveFormats != null) {
-                            val extractedUrl = parseAudioUrl(adaptiveFormats)
-                            if (extractedUrl != null) {
-                                logger?.info("online", "inner_tube_client_succeeded", context = mapOf("videoId" to videoId, "client" to clientConfig.clientName))
-                                streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
-                                val videoDetails = json.optJSONObject("videoDetails")
-                                val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
-                                val durationSec = lengthSecondsStr?.toLongOrNull()
-                                if (durationSec != null) {
-                                    streamDurationCache[videoId] = durationSec * 1000L
+                        // Check playability status first
+                        val playabilityStatus = json.optJSONObject("playabilityStatus")
+                        val status = playabilityStatus?.optString("status")
+                        if (status != null && status != "OK") {
+                            logger?.warn("online", "inner_tube_not_playable", context = mapOf(
+                                "videoId" to videoId,
+                                "client" to clientConfig.clientName,
+                                "status" to status,
+                                "reason" to (playabilityStatus.optString("reason").take(200))
+                            ))
+                            // Don't throw — try the next client in the chain
+                        } else {
+                            val streamingData = json.optJSONObject("streamingData")
+                            val adaptiveFormats = streamingData?.optJSONArray("adaptiveFormats")
+                                ?: streamingData?.optJSONArray("formats")
+
+                            if (adaptiveFormats != null) {
+                                val extractedUrl = parseAudioUrl(adaptiveFormats)
+                                if (extractedUrl != null) {
+                                    logger?.info("online", "inner_tube_client_succeeded", context = mapOf("videoId" to videoId, "client" to clientConfig.clientName))
+                                    streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
+                                    val videoDetails = json.optJSONObject("videoDetails")
+                                    val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
+                                    val durationSec = lengthSecondsStr?.toLongOrNull()
+                                    if (durationSec != null) {
+                                        streamDurationCache[videoId] = durationSec * 1000L
+                                    }
+                                    return@withContext extractedUrl
                                 }
-                                return@withContext extractedUrl
                             }
                         }
                     }
@@ -807,9 +889,7 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        // Embedded yt-dlp is an optional resolver fallback. InnerTube remains
-        // the primary online resolver and retains the stable-ID/lazy Media3
-        // contract even when this runtime is unavailable.
+        // 3. Embedded yt-dlp optional resolver
         if (FloWaveRuntime.ready) {
             localStreamResolver?.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")?.let { result ->
                 result.onSuccess { resolved ->
@@ -831,64 +911,7 @@ open class InnerTubeRepository(context: Context? = null) {
             ))
         }
 
-        // Piped Public API Fallback Stream Extraction
-        for ((attempt, candidate) in preferredCandidates(ResolverType.PIPED, System.currentTimeMillis()).take(3).withIndex()) {
-            val host = candidate.host
-            val instance = candidate.endpoint()
-            val startedAtNs = System.nanoTime()
-            try {
-                val request = Request.Builder()
-                    .url("$instance$videoId")
-                    .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
-                    .build()
-                fastClient.newCall(request).execute().use { response ->
-                    val bodyString = response.body?.string() ?: ""
-                    if (response.isSuccessful && bodyString.isNotEmpty()) {
-                        val json = JSONObject(bodyString)
-                        val selected = ResolverStreamSelector.selectPiped(json)
-                        if (selected != null) {
-                                logger?.info("online", "piped_stream_selected", context = mapOf(
-                                    "videoId" to videoId,
-                                    "host" to host,
-                                    "attempt" to attempt + 1,
-                                    "mimeType" to selected.mimeType,
-                                    "container" to selected.container,
-                                    "codec" to selected.codec,
-                                    "bitrate" to selected.bitrate,
-                                    "contentLength" to selected.contentLength,
-                                    "audioOnly" to selected.audioOnly,
-                                    "playableValidation" to false,
-                                    "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
-                                ))
-                                selectedFallbackSources[videoId] = candidate
-                                streamUrlCache[videoId] = Pair(System.currentTimeMillis(), selected.url)
-                                return@withContext selected.url
-                        }
-                    }
-                    recordFallbackFailure(
-                        videoId = videoId,
-                        resolver = "piped",
-                        candidate = candidate,
-                        attempt = attempt + 1,
-                        startedAtNs = startedAtNs,
-                        status = response.code.takeIf { !response.isSuccessful },
-                        error = IOException("Piped response contained no usable audio stream"),
-                        failureClassOverride = if (response.isSuccessful) "extraction_failure" else null,
-                        penalizeHost = response.isSuccessful.not(),
-                        retryAfterHeader = response.header("Retry-After")
-                    )
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                throw e
-            } catch (e: Exception) {
-                recordFallbackFailure(videoId, "piped", candidate, attempt + 1, startedAtNs, error = e)
-            }
-        }
-
-        // Invidious Direct Fallback Stream Extraction
+        // 4. Invidious Direct Fallback Stream Extraction
         for ((attempt, candidate) in preferredCandidates(ResolverType.INVIDIOUS, System.currentTimeMillis()).take(2).withIndex()) {
             val host = candidate.host
                 val startedAtNs = System.nanoTime()
