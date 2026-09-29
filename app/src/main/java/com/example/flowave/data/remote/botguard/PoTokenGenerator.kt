@@ -71,6 +71,7 @@ class PoTokenGenerator(private val context: Context) {
             try {
                 val createReq = Request.Builder()
                     .url("https://www.youtube.com/api/jnn/v1/Create")
+                    .header("x-goog-api-key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
                     .post("[\"O43z0dpjhgX20SCx4KAo\"]".toRequestBody("application/json".toMediaType()))
                     .build()
                 
@@ -106,6 +107,7 @@ class PoTokenGenerator(private val context: Context) {
                 try {
                     val generateReq = Request.Builder()
                         .url("https://www.youtube.com/api/jnn/v1/GenerateIT")
+                        .header("x-goog-api-key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
                         .post("[\"O43z0dpjhgX20SCx4KAo\", $botguardResponseStr]".toRequestBody("application/json".toMediaType()))
                         .build()
                     val response = httpClient.newCall(generateReq).execute()

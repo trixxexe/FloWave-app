@@ -113,8 +113,17 @@
 -dontwarn androidx.lifecycle.**
 -keep class com.yausername.** { *; }
 -dontwarn com.yausername.**
+-keep class io.github.junkfood02.youtubedl.** { *; }
+-dontwarn io.github.junkfood02.youtubedl.**
 -keep class com.sun.jna.** { *; }
--keepclassmembers class * extends com.sun.jna.** { *; }
+-keepclassmembers class com.sun.jna.** { *; }
+-keep class * extends com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
 -dontwarn com.sun.jna.**
 -keep class com.fasterxml.jackson.** { *; }
 -dontwarn com.fasterxml.jackson.**
+-keep class org.apache.commons.compress.** { *; }
+-dontwarn org.apache.commons.compress.**
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
