@@ -81,6 +81,7 @@ open class InnerTubeRepository(context: Context? = null) {
     private val appContext = context?.applicationContext
     private val logger = appContext?.let { FloWaveLogger.getInstance(it) }
     private val localStreamResolver = appContext?.let { SealStyleDownloadEngine(it) }
+    private val poTokenGenerator = appContext?.let { com.example.flowave.data.remote.botguard.PoTokenGenerator(it) }
     private val client = OkHttpClient.Builder()
         .connectTimeout(FloWaveConstants.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(FloWaveConstants.READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -768,6 +769,10 @@ open class InnerTubeRepository(context: Context? = null) {
         }
 
         // 2. InnerTube Multi-Client Fallback Chain: Native FOSS Direct Extraction
+        val poToken = try {
+            poTokenGenerator?.generateToken(videoId)
+        } catch(e: Exception) { null }
+
         for ((attempt, clientConfig) in InnerTubeClients.FALLBACK_CHAIN.withIndex()) {
             try {
                 val clientJson = JSONObject().apply {
@@ -792,6 +797,11 @@ open class InnerTubeRepository(context: Context? = null) {
                             put("html5Preference", "HTML5_PREF_WANTS")
                         })
                     })
+                    if (poToken != null) {
+                        put("serviceIntegrityDimensions", JSONObject().apply {
+                            put("poToken", poToken)
+                        })
+                    }
                     put("videoId", videoId)
                     put("contentCheckOk", true)
                     put("racyCheckOk", true)

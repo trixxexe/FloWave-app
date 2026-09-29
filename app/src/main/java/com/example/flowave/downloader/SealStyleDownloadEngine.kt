@@ -53,6 +53,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
                 addOption("--skip-download")
                 addOption("--no-warnings")
                 addOption("--no-playlist")
+                addOption("--extractor-args", "youtube:player_client=ios,tv")
             }
             val output = withTimeout(35_000L) {
                 runInterruptible(Dispatchers.IO) {
@@ -118,6 +119,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
         val template = File(outputDir, "%(title).200B [%(id)s].%(ext)s").absolutePath
         val request = YoutubeDLRequest(url).apply {
             addOption("--no-playlist")
+                addOption("--extractor-args", "youtube:player_client=ios,tv")
             addOption("--no-mtime")
             addOption("--no-overwrites")
             addOption("--restrict-filenames")
@@ -225,6 +227,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
         try {
             val request = YoutubeDLRequest(url).apply {
                 addOption("--no-playlist")
+                addOption("--extractor-args", "youtube:player_client=ios,tv")
                 addOption("--no-warnings")
                 addOption("--get-url")
                 addOption("-f", "bestaudio[protocol^=http]/bestaudio")
