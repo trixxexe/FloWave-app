@@ -296,7 +296,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 try {
                     // Reactive auto-updater for BotGuard signatures
                     YoutubeDL.getInstance().updateYoutubeDL(
-                        appContext ?: throw e
+                        appContext ?: throw e, YoutubeDL.UpdateChannel.NIGHTLY
                     )
                 } catch (updateErr: Exception) {
                     throw e
