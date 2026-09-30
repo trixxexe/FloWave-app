@@ -98,11 +98,22 @@ open class InnerTubeRepository(context: Context? = null) {
 
     // Cache stream URLs for 2 hours to avoid re-querying YouTube endpoints
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
-        private val streamResolutionLocks = ConcurrentHashMap<String, Mutex>()
+    private val selectedFallbackSources = ConcurrentHashMap<String, ResolverCandidate>()
+    private val streamResolutionLocks = ConcurrentHashMap<String, Mutex>()
     val streamDurationCache = ConcurrentHashMap<String, Long>()
-    
-                
-    
+    private val fallbackPool = ResolverPool().apply {
+        seed(ResolverType.PIPED, FloWaveConstants.PIPED_STREAM_INSTANCES, "curated", System.currentTimeMillis())
+        seed(ResolverType.PIPED, FloWaveConstants.PIPED_SEARCH_INSTANCES, "curated", System.currentTimeMillis())
+        seed(ResolverType.INVIDIOUS, FloWaveConstants.INVIDIOUS_SEARCH_INSTANCES, "curated", System.currentTimeMillis())
+    }
+    private val fallbackPersistence = appContext?.let { ResolverPoolPersistence(it) }
+    private val invidiousDiscovery = appContext?.let { InvidiousInstanceDiscovery(client) }
+    private val discoveryMutex = Mutex()
+    private var lastDiscoveryAttemptMs = 0L
+
+    init {
+        fallbackPersistence?.load()?.takeIf { it.isNotBlank() }?.let { fallbackPool.restore(it) }
+    }
 
     fun getCachedDuration(videoId: String): Long {
         return streamDurationCache[videoId] ?: 0L
@@ -110,7 +121,8 @@ open class InnerTubeRepository(context: Context? = null) {
 
     fun invalidateStreamUrl(videoId: String) {
         streamUrlCache.remove(videoId)
-                logger?.debug("online", "stream_cache_invalidated", context = mapOf("videoId" to videoId))
+        selectedFallbackSources.remove(videoId)
+        logger?.debug("online", "stream_cache_invalidated", context = mapOf("videoId" to videoId))
     }
 
     open suspend fun getStreamResolution(videoId: String, forceRefresh: Boolean = false): ResolvedStreamSource {
@@ -153,7 +165,12 @@ open class InnerTubeRepository(context: Context? = null) {
         ))
     }
 
-    
+    private fun preferredCandidates(type: ResolverType, nowMs: Long): List<ResolverCandidate> {
+        val preferredKey = fallbackPersistence?.loadPreferred(type)
+        val preferred = preferredKey?.let { fallbackPool.get(it) }
+            ?.takeIf { it.type == type && it.cooldownUntilMs <= nowMs && it.retiredUntilMs <= nowMs }
+        return listOfNotNull(preferred) + fallbackPool.ranked(type, nowMs).filter { it.key != preferred?.key }
+    }
 
     /** Parses a duration string (e.g., "3:45", "1:02:30", or "45") into milliseconds. */
     fun parseDurationText(text: String): Long {
@@ -441,14 +458,108 @@ open class InnerTubeRepository(context: Context? = null) {
 
         if (tracks.isNotEmpty()) return@withContext tracks
 
-        }
+        // ENGINE 2: Public Piped Search API Instances
 
-        }
 
-        tracks
-    }
 
-    suspend fun getTrackMetadata(videoId: String): InnerTubeTrack? = withContext(Dispatchers.IO) {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         for (clientConfig in InnerTubeClients.FALLBACK_CHAIN) {
             try {
                 val clientJson = JSONObject().apply {
@@ -598,6 +709,70 @@ open class InnerTubeRepository(context: Context? = null) {
         // InnerTube direct (which may require po_token/DroidGuard attestation
         // that third-party apps cannot provide), then Invidious, then yt-dlp.
 
+        // 1. Piped Public API Fallback Stream Extraction (PRIMARY)
+//        for ((attempt, candidate) in preferredCandidates(ResolverType.PIPED, System.currentTimeMillis()).take(4).withIndex()) {
+//            val host = candidate.host
+//            val instance = candidate.endpoint()
+//            val startedAtNs = System.nanoTime()
+//            try {
+//                val request = Request.Builder()
+//                    .url("$instance$videoId")
+//                    .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
+//                    .build()
+//                fastClient.newCall(request).execute().use { response ->
+//                    val bodyString = response.body?.string() ?: ""
+//                    if (response.isSuccessful && bodyString.isNotEmpty()) {
+//                        val json = JSONObject(bodyString)
+//                        val selected = ResolverStreamSelector.selectPiped(json)
+//                        if (selected != null) {
+//                                logger?.info("online", "piped_stream_selected", context = mapOf(
+//                                    "videoId" to videoId,
+//                                    "host" to host,
+//                                    "attempt" to attempt + 1,
+//                                    "mimeType" to selected.mimeType,
+//                                    "container" to selected.container,
+//                                    "codec" to selected.codec,
+//                                    "bitrate" to selected.bitrate,
+//                                    "contentLength" to selected.contentLength,
+//                                    "audioOnly" to selected.audioOnly,
+//                                    "playableValidation" to false,
+//                                    "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
+//                                ))
+//                                selectedFallbackSources[videoId] = candidate
+//                                streamUrlCache[videoId] = Pair(System.currentTimeMillis(), selected.url)
+//
+//                                // Also cache duration from Piped response
+//                                val durationSec = json.optLong("duration", 0L)
+//                                if (durationSec > 0L) {
+//                                    streamDurationCache[videoId] = durationSec * 1000L
+//                                }
+//
+//                                return@withContext selected.url
+//                        }
+//                    }
+//                    recordFallbackFailure(
+//                        videoId = videoId,
+//                        resolver = "piped",
+//                        candidate = candidate,
+//                        attempt = attempt + 1,
+//                        startedAtNs = startedAtNs,
+//                        status = response.code.takeIf { !response.isSuccessful },
+//                        error = IOException("Piped response contained no usable audio stream"),
+//                        failureClassOverride = if (response.isSuccessful) "extraction_failure" else null,
+//                        penalizeHost = response.isSuccessful.not(),
+//                        retryAfterHeader = response.header("Retry-After")
+//                    )
+//                }
+//            } catch (e: kotlinx.coroutines.CancellationException) {
+//                throw e
+//            } catch (e: InterruptedException) {
+//                Thread.currentThread().interrupt()
+//                throw e
+//            } catch (e: Exception) {
+                recordFallbackFailure(videoId, "piped", candidate, attempt + 1, startedAtNs, error = e)
+            }
+        }
+
         // 2. InnerTube Multi-Client Fallback Chain: Native FOSS Direct Extraction
         val poToken = try {
             poTokenGenerator?.generateToken(videoId)
@@ -616,17 +791,11 @@ open class InnerTubeRepository(context: Context? = null) {
                     put("hl", "en")
                     put("gl", "US")
                 }
-                
-                // YouTube strict validation requires a Client Playback Nonce (CPN)
-                val charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-                val cpn = (1..16).map { charset.random() }.joinToString("")
-                
                 val requestBodyJson = JSONObject().apply {
                     put("context", JSONObject().apply {
                         put("client", clientJson)
                         put("clientScreen", "MOBILE")
                     })
-                    put("cpn", cpn)
                     put("playbackContext", JSONObject().apply {
                         put("contentPlaybackContext", JSONObject().apply {
                             put("signatureTimestamp", 20110)
@@ -738,6 +907,67 @@ open class InnerTubeRepository(context: Context? = null) {
             ))
         }
 
+        // 4. Invidious Direct Fallback Stream Extraction
+        for ((attempt, candidate) in preferredCandidates(ResolverType.INVIDIOUS, System.currentTimeMillis()).take(2).withIndex()) {
+//            val host = candidate.host
+//                val startedAtNs = System.nanoTime()
+//                try {
+//                val apiUrl = "https://$host/api/v1/videos/$videoId"
+//                val request = Request.Builder()
+//                    .url(apiUrl)
+//                    .get()
+//                    .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
+//                    .build()
+//                fastClient.newCall(request).execute().use { response ->
+//                    val body = response.body?.source()?.readUtf8(4L * 1024L * 1024L).orEmpty()
+//                    val selected = if (response.isSuccessful && body.isNotBlank()) {
+//                        runCatching { ResolverStreamSelector.selectInvidious(JSONObject(body)) }.getOrNull()
+//                    } else null
+//                    if (selected != null) {
+//                        logger?.info("online", "invidious_stream_selected", context = mapOf(
+//                            "videoId" to videoId,
+//                            "host" to host,
+//                            "attempt" to attempt + 1,
+//                            "mimeType" to selected.mimeType,
+//                            "container" to selected.container,
+//                            "codec" to selected.codec,
+//                            "bitrate" to selected.bitrate,
+//                            "contentLength" to selected.contentLength,
+//                            "audioOnly" to selected.audioOnly,
+//                            "playableValidation" to false,
+//                            "durationMs" to ((System.nanoTime() - startedAtNs) / 1_000_000L)
+//                        ))
+//                        selectedFallbackSources[videoId] = candidate
+//                        streamUrlCache[videoId] = Pair(System.currentTimeMillis(), selected.url)
+//                        return@withContext selected.url
+//                    }
+//                    recordFallbackFailure(
+//                        videoId = videoId,
+//                        resolver = "invidious",
+//                        candidate = candidate,
+//                        attempt = attempt + 1,
+//                        startedAtNs = startedAtNs,
+//                        status = response.code,
+//                        error = IOException("Invidious response did not provide a stream"),
+//                        failureClassOverride = if (response.isSuccessful) "extraction_failure" else null,
+//                        penalizeHost = response.isSuccessful.not(),
+//                        retryAfterHeader = response.header("Retry-After")
+//                    )
+//                }
+//            } catch (e: kotlinx.coroutines.CancellationException) {
+//                throw e
+//            } catch (e: InterruptedException) {
+//                Thread.currentThread().interrupt()
+//                throw e
+//            } catch (e: Exception) {
+//                recordFallbackFailure(videoId, "invidious", candidate, attempt + 1, startedAtNs, error = e)
+//            }
+//        }
+//
+        // All extraction candidates exhausted, throw a clear extraction exception to fail cleanly without fake test streams
+//        if (allowDiscovery && discoverFallbacks()) {
+//            return@withContext getStreamUrlInternal(videoId, forceRefresh, allowDiscovery = false)
+//        }
         throw java.io.IOException("All extraction attempts and fallback clients were exhausted for videoId: $videoId")
     }
 
