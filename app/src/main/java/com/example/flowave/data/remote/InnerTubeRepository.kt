@@ -74,7 +74,7 @@ object InnerTubeClients {
     )
 
     // Using exact client hierarchy proven to bypass current anti-bot restrictions locally
-    val FALLBACK_CHAIN = listOf(ANDROID_MUSIC, IOS_MUSIC, TVHTML5_SIMPLY_EMBEDDED_PLAYER, WEB_REMIX)
+    val FALLBACK_CHAIN = listOf(ANDROID_MUSIC, IOS_MUSIC, WEB_REMIX)
 }
 
 open class InnerTubeRepository(context: Context? = null) {

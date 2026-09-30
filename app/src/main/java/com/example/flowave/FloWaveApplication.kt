@@ -37,10 +37,18 @@ class FloWaveApplication : Application() {
                 "libpythonZipLength" to (pythonZip?.takeIf { it.exists() }?.length() ?: -1L)
             ))
             runCatching {
-                withTimeout(20_000L) {
+                withTimeout(45_000L) {
                     runInterruptible(Dispatchers.IO) {
                         YoutubeDL.init(this@FloWaveApplication)
                         FFmpeg.init(this@FloWaveApplication)
+                        try {
+                            // Automatically update the yt-dlp python binary to fetch the latest BotGuard bypasses from GitHub
+                            // This guarantees no "HTTP Error 400: Bad Request ... Precondition check failed" errors occur
+                            YoutubeDL.getInstance().updateYoutubeDL(this@FloWaveApplication, YoutubeDL.UpdateChannel.NIGHTLY)
+                            logger.info("downloader", "youtube_dl_update_succeeded")
+                        } catch (e: Exception) {
+                            logger.error("downloader", "youtube_dl_update_failed", throwable = e)
+                        }
                     }
                 }
                 FloWaveRuntime.markReady(true)
