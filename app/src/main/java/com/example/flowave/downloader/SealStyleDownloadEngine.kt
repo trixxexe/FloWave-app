@@ -28,8 +28,8 @@ import java.util.UUID
  * It deliberately does not execute a downloaded Linux binary, which cannot run
  * reliably on Android and was the reason the previous downloader failed.
  */
-class SealStyleDownloadEngine(context: Context? = null) {
-    private val logger = context?.applicationContext?.let { FloWaveLogger.getInstance(it) }
+class SealStyleDownloadEngine(private val appContext: Context? = null) {
+    private val logger = appContext?.applicationContext?.let { FloWaveLogger.getInstance(it) }
 
     suspend fun inspect(input: String): Result<List<DownloadMediaInfo>> = withContext(Dispatchers.IO) {
         val operation = if (DownloadInput.isHttpUrl(input)) "url_metadata" else "keyword_search"
@@ -296,8 +296,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
                 try {
                     // Reactive auto-updater for BotGuard signatures
                     YoutubeDL.getInstance().updateYoutubeDL(
-                        com.example.flowave.FloWaveApplication(), 
-                        YoutubeDL.UpdateChannel.NIGHTLY
+                        appContext ?: throw e
                     )
                 } catch (updateErr: Exception) {
                     throw e
