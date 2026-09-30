@@ -57,7 +57,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
             }
             val output = withTimeout(35_000L) {
                 runInterruptible(Dispatchers.IO) {
-                    YoutubeDL.getInstance().execute(
+                    executeWithUpdateRetry(
                         request, "flowave-inspect-${UUID.randomUUID()}", null
                     ).out
                 }
@@ -149,7 +149,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
         try {
             val response = withTimeout(6 * 60_000L) {
                 runInterruptible(Dispatchers.IO) {
-                    YoutubeDL.getInstance().execute(request, processId) { progress, _, line ->
+                    executeWithUpdateRetry(request, processId) { progress, _, line ->
                         trySend(DownloadState.Downloading(progress.toFloat(), parseSpeed(line), parseEta(line)))
                         if (line.contains("ExtractAudio", ignoreCase = true) ||
                             line.contains("Post-process", ignoreCase = true) ||
@@ -234,7 +234,7 @@ class SealStyleDownloadEngine(context: Context? = null) {
             }
             val output = withTimeout(25_000L) {
                 runInterruptible(Dispatchers.IO) {
-                    YoutubeDL.getInstance().execute(
+                    executeWithUpdateRetry(
                         request,
                         "flowave-resolve-${UUID.randomUUID()}",
                         null
@@ -278,6 +278,40 @@ class SealStyleDownloadEngine(context: Context? = null) {
         Regex("\\bETA\\s+([^ ]+)").find(line)?.groupValues?.get(1) ?: ""
 
     private fun elapsedMs(startedAt: Long): Long = (System.nanoTime() - startedAt) / 1_000_000L
+
+    private fun executeWithUpdateRetry(
+        request: YoutubeDLRequest, 
+        processId: String, 
+        callback: ((Float, Long, String?) -> Unit)? = null
+    ): com.yausername.youtubedl_android.YoutubeDLResponse {
+        return try {
+            if (callback == null) {
+                YoutubeDL.getInstance().execute(request, processId, null)
+            } else {
+                YoutubeDL.getInstance().execute(request, processId, callback)
+            }
+        } catch (e: com.yausername.youtubedl_android.YoutubeDLException) {
+            val msg = e.message ?: ""
+            if (msg.contains("400") || msg.contains("Precondition") || msg.contains("Sign in") || msg.contains("Video unavailable")) {
+                try {
+                    // Reactive auto-updater for BotGuard signatures
+                    YoutubeDL.getInstance().updateYoutubeDL(
+                        com.example.flowave.FloWaveApplication(), 
+                        YoutubeDL.UpdateChannel.NIGHTLY
+                    )
+                } catch (updateErr: Exception) {
+                    throw e
+                }
+                if (callback == null) {
+                    YoutubeDL.getInstance().execute(request, processId, null)
+                } else {
+                    YoutubeDL.getInstance().execute(request, processId, callback)
+                }
+            } else {
+                throw e
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "SealStyleDownloadEngine"

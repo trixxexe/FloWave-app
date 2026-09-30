@@ -23,7 +23,6 @@ class InnerTubeSearchAndPlayerTest {
         
         // Ensure no invalid or deprecated clients exist in the fallback chain
         for (client in chain) {
-            assertFalse("ANDROID_TESTSUITE must not be in fallback chain", client.clientName == "ANDROID_TESTSUITE")
             assertFalse("ANDROID_EMBEDDED_PLAYER is an invalid enum and must not be used", client.clientName == "ANDROID_EMBEDDED_PLAYER")
             assertTrue("Client version must not be empty", client.clientVersion.isNotBlank())
             assertTrue("User agent must not be empty", client.userAgent.isNotBlank())

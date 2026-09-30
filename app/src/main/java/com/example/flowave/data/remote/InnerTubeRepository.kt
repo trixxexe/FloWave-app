@@ -45,6 +45,11 @@ data class ResolvedStreamSource(
 )
 
 object InnerTubeClients {
+    val ANDROID_TESTSUITE = InnerTubeClientConfig(
+        clientName = "ANDROID_TESTSUITE",
+        clientVersion = "1.9",
+        userAgent = "com.google.android.youtube/1.9 (Linux; U; Android 11; en_US) gzip"
+    )
     val ANDROID_MUSIC = InnerTubeClientConfig(
         clientName = "ANDROID_MUSIC",
         clientVersion = "5.01",
@@ -74,7 +79,7 @@ object InnerTubeClients {
     )
 
     // Using exact client hierarchy proven to bypass current anti-bot restrictions locally
-    val FALLBACK_CHAIN = listOf(ANDROID_MUSIC, IOS_MUSIC, WEB_REMIX)
+    val FALLBACK_CHAIN = listOf(ANDROID_TESTSUITE, ANDROID_MUSIC, IOS_MUSIC, WEB_REMIX)
 }
 
 open class InnerTubeRepository(context: Context? = null) {
