@@ -282,7 +282,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
     private fun executeWithUpdateRetry(
         request: YoutubeDLRequest, 
         processId: String, 
-        callback: ((Float, Long, String?) -> Unit)? = null
+        callback: ((Float, Long, String) -> Unit)? = null
     ): com.yausername.youtubedl_android.YoutubeDLResponse {
         return try {
             if (callback == null) {
