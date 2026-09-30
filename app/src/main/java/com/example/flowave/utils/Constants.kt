@@ -25,26 +25,10 @@ object FloWaveConstants {
     const val INNERTUBE_SEARCH_URL = "https://music.youtube.com/youtubei/v1/search?key=$INNERTUBE_KEY_MUSIC"
     const val INNERTUBE_PLAYER_URL = "https://www.youtube.com/youtubei/v1/player?key=$INNERTUBE_KEY_WEB"
 
-    val PIPED_SEARCH_INSTANCES = listOf(
-        "https://pipedapi.kavin.rocks/search?q=",
-        "https://api.piped.video/search?q=",
-        "https://pipedapi.mha.fi/search?"
-    )
     
-    // Curated from the projects' published instance lists. These are only
-    // bounded fallbacks; InnerTube remains the primary resolver. Public
-    // instances are volatile, so the resolver also applies host cooldowns.
-    val INVIDIOUS_SEARCH_INSTANCES = listOf(
-        "https://inv.nadeko.net/api/v1/search?q=",
-        "https://invidious.nerdvpn.de/api/v1/search?q=",
-        "https://yt.chocolatemoo53.com/api/v1/search?q="
-    )
+    
+    
+    
 
-    val PIPED_STREAM_INSTANCES = listOf(
-        "https://pipedapi.kavin.rocks/streams/",
-        "https://pipedapi.leptons.xyz/streams/",
-        "https://pipedapi.nosebs.ru/streams/",
-        "https://api.piped.video/streams/",
-        "https://pipedapi.mha.fi/streams/"
-    )
+    
 }
