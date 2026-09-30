@@ -616,11 +616,17 @@ open class InnerTubeRepository(context: Context? = null) {
                     put("hl", "en")
                     put("gl", "US")
                 }
+                
+                // YouTube strict validation requires a Client Playback Nonce (CPN)
+                val charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+                val cpn = (1..16).map { charset.random() }.joinToString("")
+                
                 val requestBodyJson = JSONObject().apply {
                     put("context", JSONObject().apply {
                         put("client", clientJson)
                         put("clientScreen", "MOBILE")
                     })
+                    put("cpn", cpn)
                     put("playbackContext", JSONObject().apply {
                         put("contentPlaybackContext", JSONObject().apply {
                             put("signatureTimestamp", 20110)

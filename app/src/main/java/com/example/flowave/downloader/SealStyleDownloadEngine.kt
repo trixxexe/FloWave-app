@@ -55,7 +55,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 addOption("--no-playlist")
                 addOption("--extractor-args", "youtube:player_client=android,ios,web")
             }
-            val output = withTimeout(35_000L) {
+            val output = withTimeout(90_000L) {
                 runInterruptible(Dispatchers.IO) {
                     executeWithUpdateRetry(
                         request, "flowave-inspect-${UUID.randomUUID()}", null
@@ -232,7 +232,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 addOption("--get-url")
                 addOption("-f", "bestaudio[protocol^=http]/bestaudio")
             }
-            val output = withTimeout(25_000L) {
+            val output = withTimeout(90_000L) {
                 runInterruptible(Dispatchers.IO) {
                     executeWithUpdateRetry(
                         request,

@@ -57,6 +57,7 @@ class FloWaveDataSourceFactory(
             .build()
 
         return OkHttpDataSource.Factory(streamClient)
+            .setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
             .createDataSource()
     }
 
