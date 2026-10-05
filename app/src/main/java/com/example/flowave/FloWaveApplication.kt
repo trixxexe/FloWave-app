@@ -1,6 +1,7 @@
 package com.example.flowave
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import com.example.flowave.diagnostics.FloWaveLogger
 import com.yausername.ffmpeg.FFmpeg
