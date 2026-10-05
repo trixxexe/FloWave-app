@@ -41,15 +41,20 @@ class FloWaveApplication : Application() {
                     runInterruptible(Dispatchers.IO) {
                         YoutubeDL.init(this@FloWaveApplication)
                         FFmpeg.init(this@FloWaveApplication)
-                        try {
-                            // Automatically update the yt-dlp python binary to fetch the latest BotGuard bypasses from GitHub
-                            // This guarantees no "HTTP Error 400: Bad Request ... Precondition check failed" errors occur
-                        } catch (e: Exception) {
-                        }
                     }
                 }
                 FloWaveRuntime.markReady(true)
                 logger.info("downloader", "runtime_initialization_succeeded")
+
+                // Background async update to NIGHTLY to keep yt-dlp extractor rules current
+                runtimeScope.launch {
+                    try {
+                        YoutubeDL.getInstance().updateYoutubeDL(this@FloWaveApplication, YoutubeDL.UpdateChannel.NIGHTLY)
+                        logger.info("downloader", "runtime_background_update_succeeded")
+                    } catch (e: Exception) {
+                        logger.warn("downloader", "runtime_background_update_failed", throwable = e)
+                    }
+                }
                 Unit
             }.onFailure { error: Throwable ->
                 FloWaveRuntime.markReady(false)
@@ -63,6 +68,10 @@ class FloWaveApplication : Application() {
 
     companion object {
         private const val TAG = "FloWaveApplication"
+
+        @Volatile
+        var appContext: Context? = null
+            private set
     }
 }
 

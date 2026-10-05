@@ -18,7 +18,19 @@ object YouTubeDecipherer {
     @Volatile
     private var cachedOpsTimestampMs: Long = 0L
 
+    @Volatile
+    private var cachedSignatureTimestamp: Int? = null
+
     private const val OPS_CACHE_TTL_MS = 24L * 60 * 60 * 1000 // 24 hours
+
+    /**
+     * Returns dynamically fetched or calculated signatureTimestamp for YouTube player requests.
+     * In YouTube, signatureTimestamp represents days since Unix epoch.
+     */
+    fun getSignatureTimestamp(): Int {
+        cachedSignatureTimestamp?.let { return it }
+        return (System.currentTimeMillis() / 86_400_000L).toInt()
+    }
 
     enum class OpType {
         REVERSE, SLICE, SWAP
@@ -99,6 +111,11 @@ object YouTubeDecipherer {
             client.newCall(request).execute().use { response ->
                 val jsContent = response.body?.string() ?: ""
                 if (response.isSuccessful && jsContent.isNotEmpty()) {
+                    val stsMatch = Regex("""(?:signatureTimestamp|sts)\s*[:=]\s*(\d+)""").find(jsContent)
+                    stsMatch?.groupValues?.get(1)?.toIntOrNull()?.let {
+                        cachedSignatureTimestamp = it
+                        android.util.Log.d(TAG, "Successfully extracted signatureTimestamp: $it")
+                    }
                     val ops = parseDecipherOpsFromJs(jsContent)
                     if (ops.isNotEmpty()) {
                         cachedOps = ops

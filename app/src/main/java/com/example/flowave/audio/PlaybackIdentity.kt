@@ -78,4 +78,12 @@ object OnlinePlaybackPolicy {
         "timeout", "http_server_failure" -> 2 * 60 * 1000L
         else -> 60 * 1000L
     }
+
+    fun isPlayableResponseContentType(contentType: String?): Boolean {
+        val normalized = contentType.orEmpty().substringBefore(';').trim().lowercase()
+        return normalized.isBlank() ||
+            normalized.startsWith("audio/") ||
+            normalized.startsWith("video/") ||
+            normalized == "application/octet-stream"
+    }
 }

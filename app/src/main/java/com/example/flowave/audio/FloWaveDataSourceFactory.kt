@@ -58,6 +58,12 @@ class FloWaveDataSourceFactory(
 
         return OkHttpDataSource.Factory(streamClient)
             .setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
+            .setDefaultRequestProperties(
+                mapOf(
+                    "Origin" to "https://www.youtube.com",
+                    "Referer" to "https://www.youtube.com/"
+                )
+            )
             .createDataSource()
     }
 
@@ -164,9 +170,7 @@ class FloWaveDataSourceFactory(
                         val failureClass = httpStatus?.let { OnlinePlaybackPolicy.classifyHttpStatus(it) }
                             ?: "media_open_failure"
                         if (!cancelled) {
-                            if (resolution.candidateKey != null) {
-                                streamRepository.markUnplayableStream(videoId, failureClass)
-                            }
+                            streamRepository.markUnplayableStream(videoId, failureClass)
                             streamRepository.invalidateStreamUrl(videoId)
                             FloWaveCacheManager.invalidate(videoId)
                         }
@@ -216,7 +220,7 @@ class FloWaveDataSourceFactory(
                         "urlPath" to resolvedSpec.uri.path.orEmpty().take(80),
                         "finalHost" to streamDataSource.uri?.host.orEmpty()
                     ))
-                    if (!com.example.flowave.data.remote.ResolverStreamSelector.isPlayableResponseContentType(contentType)) {
+                    if (!OnlinePlaybackPolicy.isPlayableResponseContentType(contentType)) {
                         streamDataSource.close()
                         activeDataSource = null
                         streamRepository.markUnplayableStream(videoId, "media_open_failure")

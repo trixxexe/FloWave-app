@@ -53,7 +53,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 addOption("--skip-download")
                 addOption("--no-warnings")
                 addOption("--no-playlist")
-                addOption("--extractor-args", "youtube:player_client=android,ios,web")
+                addOption("--extractor-args", "youtube:player_client=ios,android")
             }
             val output = withTimeout(90_000L) {
                 runInterruptible(Dispatchers.IO) {
@@ -220,17 +220,17 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
 
     /** Resolves a playable audio URL through the same embedded yt-dlp runtime. */
     suspend fun resolveAudioUrl(url: String): Result<String> = withContext(Dispatchers.IO) {
-        if (!FloWaveRuntime.awaitReady(2_000L)) {
+        if (!FloWaveRuntime.awaitReady(15_000L)) {
             logger?.debug("downloader", "playback_runtime_unavailable")
             return@withContext Result.failure(IllegalStateException("yt-dlp runtime unavailable"))
         }
         try {
             val request = YoutubeDLRequest(url).apply {
                 addOption("--no-playlist")
-                addOption("--extractor-args", "youtube:player_client=android,ios,web")
+                addOption("--extractor-args", "youtube:player_client=ios,android")
                 addOption("--no-warnings")
                 addOption("--get-url")
-                addOption("-f", "bestaudio[protocol^=http]/bestaudio")
+                addOption("-f", "bestaudio[protocol^=http]/bestaudio/best")
             }
             val output = withTimeout(90_000L) {
                 runInterruptible(Dispatchers.IO) {
@@ -293,13 +293,16 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
         } catch (e: com.yausername.youtubedl_android.YoutubeDLException) {
             val msg = e.message ?: ""
             if (msg.contains("400") || msg.contains("Precondition") || msg.contains("Sign in") || msg.contains("Video unavailable")) {
-                try {
-                    // Reactive auto-updater for BotGuard signatures
-                    YoutubeDL.getInstance().updateYoutubeDL(
-                        appContext ?: throw e, YoutubeDL.UpdateChannel.NIGHTLY
-                    )
-                } catch (updateErr: Exception) {
-                    throw e
+                val ctx = appContext?.applicationContext ?: com.example.flowave.FloWaveApplication.appContext
+                if (ctx != null) {
+                    try {
+                        // Reactive auto-updater for BotGuard signatures
+                        YoutubeDL.getInstance().updateYoutubeDL(
+                            ctx, YoutubeDL.UpdateChannel.NIGHTLY
+                        )
+                    } catch (updateErr: Exception) {
+                        Log.w(TAG, "Reactive update failed: ${updateErr.message}", updateErr)
+                    }
                 }
                 if (callback == null) {
                     YoutubeDL.getInstance().execute(request, processId, null)
