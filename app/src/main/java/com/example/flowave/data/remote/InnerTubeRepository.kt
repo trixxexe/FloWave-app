@@ -64,10 +64,10 @@ object InnerTubeClients {
     val ANDROID_MUSIC = InnerTubeClientConfig(
         clientName = "ANDROID_MUSIC",
         clientVersion = "6.42.52",
-        androidSdkVersion = 34,
+        androidSdkVersion = 30,
         userAgent = FloWaveConstants.USER_AGENT_ANDROID_MUSIC,
         osName = "Android",
-        osVersion = "14"
+        osVersion = "11"
     )
     val WEB_REMIX = InnerTubeClientConfig(
         clientName = "WEB_REMIX",
