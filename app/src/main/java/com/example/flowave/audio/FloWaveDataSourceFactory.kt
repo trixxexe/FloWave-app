@@ -48,7 +48,10 @@ class FloWaveDataSourceFactory(
      * 2. Valid Referer/Origin headers
      * 3. Proper redirect following
      */
-    private fun createStreamDataSource(): OkHttpDataSource {
+    private fun createStreamDataSource(
+        userAgent: String? = null,
+        requestHeaders: Map<String, String> = emptyMap()
+    ): OkHttpDataSource {
         val streamClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -56,14 +59,15 @@ class FloWaveDataSourceFactory(
             .followSslRedirects(true)
             .build()
 
+        val defaultHeaders = mutableMapOf(
+            "Origin" to "https://www.youtube.com",
+            "Referer" to "https://www.youtube.com/"
+        )
+        defaultHeaders.putAll(requestHeaders)
+
         return OkHttpDataSource.Factory(streamClient)
-            .setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
-            .setDefaultRequestProperties(
-                mapOf(
-                    "Origin" to "https://www.youtube.com",
-                    "Referer" to "https://www.youtube.com/"
-                )
-            )
+            .setUserAgent(userAgent ?: com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
+            .setDefaultRequestProperties(defaultHeaders)
             .createDataSource()
     }
 
@@ -154,7 +158,7 @@ class FloWaveDataSourceFactory(
                     // responses are not properly handled. The stream will still
                     // benefit from OkHttp's connection pooling and proper
                     // redirect following.
-                    val streamDataSource = createStreamDataSource()
+                    val streamDataSource = createStreamDataSource(resolution.userAgent, resolution.requestHeaders)
                     activeDataSource = streamDataSource
 
                     val resolvedSpec = dataSpec.buildUpon()

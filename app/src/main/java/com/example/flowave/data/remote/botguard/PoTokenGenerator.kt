@@ -38,7 +38,7 @@ class PoTokenGenerator(private val context: Context) {
     private var webPoSignalOutput: String? = null
     private var integrityToken: String? = null
     
-    private val activeContinuations = mutableMapOf<String, Continuation<String>>()
+    private val activeContinuations = mutableMapOf<String, Continuation<String?>>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -132,23 +132,44 @@ class PoTokenGenerator(private val context: Context) {
 
         @JavascriptInterface
         fun onTokenGenerated(identifier: String, poTokenU8String: String) {
-            val bytes = poTokenU8String.split(",").map { it.toShort().toByte() }.toByteArray()
-            val finalPoToken = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-            activeContinuations.remove(identifier)?.resume(finalPoToken)
+            try {
+                if (poTokenU8String.isBlank()) {
+                    activeContinuations.remove(identifier)?.resume(null)
+                    return
+                }
+                val bytes = poTokenU8String.split(",").mapNotNull { it.trim().toShortOrNull()?.toByte() }.toByteArray()
+                if (bytes.isEmpty()) {
+                    activeContinuations.remove(identifier)?.resume(null)
+                    return
+                }
+                val finalPoToken = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                if (isValidToken(finalPoToken)) {
+                    activeContinuations.remove(identifier)?.resume(finalPoToken)
+                } else {
+                    activeContinuations.remove(identifier)?.resume(null)
+                }
+            } catch (e: Exception) {
+                activeContinuations.remove(identifier)?.resume(null)
+            }
         }
 
         @JavascriptInterface
         fun onError(errorMsg: String) {
             android.util.Log.e("PoTokenGenerator", "WebView Error: $errorMsg")
+            synchronized(activeContinuations) {
+                val keys = activeContinuations.keys.toList()
+                for (k in keys) {
+                    activeContinuations.remove(k)?.resume(null)
+                }
+            }
         }
     }
 
     suspend fun generateToken(videoId: String): String? = withContext(Dispatchers.IO) {
         if (!isInitialized.get()) initialize()
         
-        // Wait max 10 seconds for initialization if still in progress
         var retries = 0
-        while (!isInitialized.get() && retries < 50) {
+        while (!isInitialized.get() && retries < 25) {
             kotlinx.coroutines.delay(200)
             retries++
         }
@@ -156,28 +177,52 @@ class PoTokenGenerator(private val context: Context) {
 
         tokenMutex.withLock {
             try {
-                suspendCancellableCoroutine<String> { cont ->
-                    activeContinuations[videoId] = cont
-                    
-                    mainHandler.post {
-                        val jsString = videoId.replace("\"", "\\\"")
-                        val u8IdStr = "new Uint8Array([" + videoId.toByteArray().joinToString(",") { it.toUByte().toString() } + "])"
+                val token = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                    suspendCancellableCoroutine<String?> { cont ->
+                        activeContinuations[videoId] = cont
+                        cont.invokeOnCancellation { activeContinuations.remove(videoId) }
                         
-                        webView?.evaluateJavascript(
-                            """
-                            try {
-                                var poTokenU8 = obtainPoToken(window.webPoSignalOutput, window.integrityToken, $u8IdStr);
-                                AndroidBotGuard.onTokenGenerated("$jsString", poTokenU8.join(","));
-                            } catch(e) {
-                                AndroidBotGuard.onError(e.toString());
-                            }
-                            """.trimIndent(), null
-                        )
+                        mainHandler.post {
+                            val jsString = videoId.replace("\"", "\\\"")
+                            val u8IdStr = "new Uint8Array([" + videoId.toByteArray().joinToString(",") { it.toUByte().toString() } + "])"
+                            
+                            webView?.evaluateJavascript(
+                                """
+                                try {
+                                    if (!window.webPoSignalOutput || !window.integrityToken) {
+                                        AndroidBotGuard.onError("BotGuard not initialized");
+                                    } else {
+                                        var poTokenU8 = obtainPoToken(window.webPoSignalOutput, window.integrityToken, $u8IdStr);
+                                        AndroidBotGuard.onTokenGenerated("$jsString", poTokenU8.join(","));
+                                    }
+                                } catch(e) {
+                                    AndroidBotGuard.onError(e.toString());
+                                }
+                                """.trimIndent(), null
+                            )
+                        }
                     }
                 }
+                if (isValidToken(token)) token else null
             } catch (e: Exception) {
                 null
             }
+        }
+    }
+
+    companion object {
+        /**
+         * Validates that a poToken is a real, non-stub token before attaching to requests.
+         */
+        fun isValidToken(token: String?): Boolean {
+            if (token.isNullOrBlank()) return false
+            val trimmed = token.trim()
+            val lower = trimmed.lowercase()
+            if (lower.contains("stub") || lower.contains("placeholder") || lower.contains("dummy") || lower.contains("fake") || lower.contains("test")) {
+                return false
+            }
+            if (trimmed.length < 16) return false
+            return true
         }
     }
 }

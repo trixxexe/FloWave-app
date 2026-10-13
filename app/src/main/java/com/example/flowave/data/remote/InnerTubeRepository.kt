@@ -37,45 +37,68 @@ data class InnerTubeClientConfig(
     val deviceModel: String? = null,
     val osName: String? = null,
     val osVersion: String? = null,
-    val androidSdkVersion: Int? = null
+    val androidSdkVersion: Int? = null,
+    val clientNumber: String? = null,
+    val hl: String = "en",
+    val gl: String = "US"
 )
 
 data class ResolvedStreamSource(
     val url: String,
     val resolver: String,
-    val candidateKey: String? = null
+    val candidateKey: String? = null,
+    val userAgent: String? = null,
+    val requestHeaders: Map<String, String> = emptyMap()
 )
 
 object InnerTubeClients {
-    val ANDROID_TESTSUITE = InnerTubeClientConfig(
-        clientName = "ANDROID_TESTSUITE",
-        clientVersion = "1.9",
-        userAgent = "com.google.android.youtube/1.9 (Linux; U; Android 11; en_US) gzip"
+    val ANDROID_VR = InnerTubeClientConfig(
+        clientName = "ANDROID_VR",
+        clientVersion = "1.56.21",
+        deviceMake = "Oculus",
+        deviceModel = "Quest 2",
+        osName = "Android",
+        osVersion = "12",
+        androidSdkVersion = 32,
+        hl = "en",
+        gl = "US",
+        userAgent = "com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12; en_US; Quest 2; Build/SQ3A.220605.009.A1) gzip",
+        clientNumber = "28"
     )
+
     val IOS = InnerTubeClientConfig(
         clientName = "IOS",
         clientVersion = "19.29.1",
         deviceMake = "Apple",
-        deviceModel = "iPhone15,2",
-        userAgent = FloWaveConstants.USER_AGENT_IOS,
+        deviceModel = "iPhone16,2",
         osName = "iPhone",
-        osVersion = "16.4"
+        osVersion = "17.5.1.21F90",
+        hl = "en",
+        gl = "US",
+        userAgent = "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)",
+        clientNumber = "5"
     )
-    val ANDROID_MUSIC = InnerTubeClientConfig(
-        clientName = "ANDROID_MUSIC",
-        clientVersion = "6.42.52",
-        androidSdkVersion = 30,
-        userAgent = FloWaveConstants.USER_AGENT_ANDROID_MUSIC,
-        osName = "Android",
-        osVersion = "11"
+
+    val ANDROID_TESTSUITE = InnerTubeClientConfig(
+        clientName = "ANDROID_TESTSUITE",
+        clientVersion = "1.9",
+        androidSdkVersion = 32,
+        hl = "en",
+        gl = "US",
+        userAgent = "com.google.android.youtube/1.9 (Linux; U; Android 12; US) gzip",
+        clientNumber = "30"
     )
+
     val WEB_REMIX = InnerTubeClientConfig(
         clientName = "WEB_REMIX",
         clientVersion = "1.20250122.01.00",
-        userAgent = FloWaveConstants.USER_AGENT_DESKTOP
+        userAgent = FloWaveConstants.USER_AGENT_DESKTOP,
+        clientNumber = "67"
     )
 
-    val FALLBACK_CHAIN = listOf(ANDROID_TESTSUITE, IOS, ANDROID_MUSIC, WEB_REMIX)
+    val STREAM_FALLBACK_CHAIN = listOf(ANDROID_VR, IOS, ANDROID_TESTSUITE)
+
+    val FALLBACK_CHAIN = STREAM_FALLBACK_CHAIN
 }
 
 open class InnerTubeRepository(context: Context? = null) {
@@ -92,8 +115,9 @@ open class InnerTubeRepository(context: Context? = null) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    // Cache stream URLs for 30 minutes to avoid re-querying YouTube endpoints
+    // Cache stream URLs and resolutions for 30 minutes to avoid re-querying YouTube endpoints
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
+    private val streamResolutionCache = ConcurrentHashMap<String, Pair<Long, ResolvedStreamSource>>()
     private val streamResolutionLocks = ConcurrentHashMap<String, Mutex>()
     val streamDurationCache = ConcurrentHashMap<String, Long>()
 
@@ -103,16 +127,33 @@ open class InnerTubeRepository(context: Context? = null) {
 
     fun invalidateStreamUrl(videoId: String) {
         streamUrlCache.remove(videoId)
+        streamResolutionCache.remove(videoId)
         logger?.debug("online", "stream_cache_invalidated", context = mapOf("videoId" to videoId))
     }
 
     open suspend fun getStreamResolution(videoId: String, forceRefresh: Boolean = false): ResolvedStreamSource {
-        val url = getStreamUrl(videoId, forceRefresh)
-        return ResolvedStreamSource(
-            url = url,
-            resolver = "inner_tube",
-            candidateKey = null
-        )
+        logger?.info("online", "stream_resolution_started", context = mapOf("videoId" to videoId, "forceRefresh" to forceRefresh))
+        val lock = streamResolutionLocks.computeIfAbsent(videoId) { Mutex() }
+        return try {
+            lock.withLock { getStreamResolutionInternal(videoId, forceRefresh) }
+                .also { logger?.info("online", "stream_resolved", context = mapOf(
+                    "videoId" to videoId,
+                    "resolverSuccess" to true,
+                    "urlHost" to (runCatching { java.net.URI(it.url).host }.getOrNull().orEmpty())
+                )) }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            logger?.debug("online", "stream_resolution_cancelled", context = mapOf("videoId" to videoId, "reason" to "resolver_cancelled"))
+            throw error
+        } catch (error: InterruptedException) {
+            logger?.debug("online", "stream_resolution_cancelled", context = mapOf("videoId" to videoId, "reason" to "resolver_interrupted"))
+            throw error
+        } catch (error: Exception) {
+            logger?.error("online", "stream_resolution_failed", error.message.orEmpty(), mapOf(
+                "videoId" to videoId,
+                "failureClass" to OnlinePlaybackPolicy.classifyResolverFailure(error)
+            ), error)
+            throw error
+        }
     }
 
     fun markPlayableStream(videoId: String, latencyMs: Long) {
@@ -357,9 +398,10 @@ open class InnerTubeRepository(context: Context? = null) {
                     .header("User-Agent", clientConfig.userAgent)
                     .header("Content-Type", "application/json")
 
-                if (clientConfig.clientName.contains("WEB")) {
-                    reqBuilder.header("Origin", "https://music.youtube.com")
-                    reqBuilder.header("Referer", "https://music.youtube.com/")
+                clientConfig.clientNumber?.let { reqBuilder.header("X-YouTube-Client-Name", it) }
+                reqBuilder.header("X-YouTube-Client-Version", clientConfig.clientVersion)
+                if (clientConfig.clientName == "ANDROID_VR") {
+                    reqBuilder.header("Origin", "https://www.youtube.com")
                 }
 
                 executeWithRetry(reqBuilder.build(), maxRetries = 1).use { response ->
@@ -408,72 +450,60 @@ open class InnerTubeRepository(context: Context? = null) {
 
     private fun cleanExpiredStreamCache() {
         val now = System.currentTimeMillis()
-        val iterator = streamUrlCache.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
+        val urlIter = streamUrlCache.entries.iterator()
+        while (urlIter.hasNext()) {
+            val entry = urlIter.next()
             if (now - entry.value.first > FloWaveConstants.STREAM_CACHE_DURATION_MS) {
-                iterator.remove()
+                urlIter.remove()
+            }
+        }
+        val resIter = streamResolutionCache.entries.iterator()
+        while (resIter.hasNext()) {
+            val entry = resIter.next()
+            if (now - entry.value.first > FloWaveConstants.STREAM_CACHE_DURATION_MS) {
+                resIter.remove()
             }
         }
     }
 
     suspend fun getStreamUrl(videoId: String, forceRefresh: Boolean = false): String {
-        logger?.info("online", "stream_resolution_started", context = mapOf("videoId" to videoId, "forceRefresh" to forceRefresh))
-        val lock = streamResolutionLocks.computeIfAbsent(videoId) { Mutex() }
-        return try {
-            lock.withLock { getStreamUrlInternal(videoId, forceRefresh) }
-                .also { logger?.info("online", "stream_resolved", context = mapOf(
-                    "videoId" to videoId,
-                    "resolverSuccess" to true,
-                    "urlHost" to (runCatching { java.net.URI(it).host }.getOrNull().orEmpty())
-                )) }
-        } catch (error: kotlinx.coroutines.CancellationException) {
-            logger?.debug("online", "stream_resolution_cancelled", context = mapOf("videoId" to videoId, "reason" to "resolver_cancelled"))
-            throw error
-        } catch (error: InterruptedException) {
-            logger?.debug("online", "stream_resolution_cancelled", context = mapOf("videoId" to videoId, "reason" to "resolver_interrupted"))
-            throw error
-        } catch (error: Exception) {
-            logger?.error("online", "stream_resolution_failed", error.message.orEmpty(), mapOf(
-                "videoId" to videoId,
-                "failureClass" to OnlinePlaybackPolicy.classifyResolverFailure(error)
-            ), error)
-            throw error
-        }
+        return getStreamResolution(videoId, forceRefresh).url
     }
 
-    private suspend fun getStreamUrlInternal(
+    private suspend fun getStreamResolutionInternal(
         videoId: String,
         forceRefresh: Boolean = false
-    ): String = withContext(Dispatchers.IO) {
+    ): ResolvedStreamSource = withContext(Dispatchers.IO) {
         cleanExpiredStreamCache()
         if (forceRefresh) {
             streamUrlCache.remove(videoId)
+            streamResolutionCache.remove(videoId)
         }
 
         // Check cache first
-        val cached = streamUrlCache[videoId]
+        val cached = streamResolutionCache[videoId]
         if (cached != null) {
-            val expired = isStreamUrlExpired(cached.second) || (System.currentTimeMillis() - cached.first) >= FloWaveConstants.STREAM_CACHE_DURATION_MS
+            val expired = isStreamUrlExpired(cached.second.url) || (System.currentTimeMillis() - cached.first) >= FloWaveConstants.STREAM_CACHE_DURATION_MS
             if (!expired) {
-                android.util.Log.d("FloWaveInnerTube", "Stream URL served from cache for $videoId")
+                android.util.Log.d("FloWaveInnerTube", "Stream resolution served from cache for $videoId")
                 return@withContext cached.second
             } else {
+                streamResolutionCache.remove(videoId)
                 streamUrlCache.remove(videoId)
-                android.util.Log.d("FloWaveInnerTube", "Cached URL for $videoId expired. Refetching...")
+                android.util.Log.d("FloWaveInnerTube", "Cached resolution for $videoId expired. Refetching...")
             }
         }
 
         // 1. InnerTube Multi-Client Extraction Chain (Native direct extraction)
+        // Never attach stub or placeholder tokens unless verified non-stub
         val poToken = try {
-            poTokenGenerator?.generateToken(videoId)
+            poTokenGenerator?.generateToken(videoId)?.takeIf { com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(it) }
         } catch (e: Exception) {
             null
         }
 
-        for ((attempt, clientConfig) in InnerTubeClients.FALLBACK_CHAIN.withIndex()) {
+        for ((attempt, clientConfig) in InnerTubeClients.STREAM_FALLBACK_CHAIN.withIndex()) {
             try {
-                val isWebClient = clientConfig.clientName.contains("WEB")
                 val clientJson = JSONObject().apply {
                     put("clientName", clientConfig.clientName)
                     put("clientVersion", clientConfig.clientVersion)
@@ -482,8 +512,8 @@ open class InnerTubeRepository(context: Context? = null) {
                     clientConfig.osName?.let { put("osName", it) }
                     clientConfig.osVersion?.let { put("osVersion", it) }
                     clientConfig.androidSdkVersion?.let { put("androidSdkVersion", it) }
-                    put("hl", "en")
-                    put("gl", "US")
+                    put("hl", clientConfig.hl)
+                    put("gl", clientConfig.gl)
                 }
 
                 val charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
@@ -492,36 +522,21 @@ open class InnerTubeRepository(context: Context? = null) {
                 val requestBodyJson = JSONObject().apply {
                     put("context", JSONObject().apply {
                         put("client", clientJson)
-                        if (!isWebClient) {
-                            put("clientScreen", "MOBILE")
-                        }
                     })
                     put("cpn", cpn)
                     put("videoId", videoId)
                     put("contentCheckOk", true)
                     put("racyCheckOk", true)
 
-                    if (isWebClient) {
-                        val sts = YouTubeDecipherer.getSignatureTimestamp()
-                        put("playbackContext", JSONObject().apply {
-                            put("contentPlaybackContext", JSONObject().apply {
-                                put("signatureTimestamp", sts)
-                                put("html5Preference", "HTML5_PREF_WANTS")
-                            })
+                    // Attach serviceIntegrityDimensions ONLY if a verified non-stub token is present
+                    if (com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(poToken)) {
+                        put("serviceIntegrityDimensions", JSONObject().apply {
+                            put("poToken", poToken)
                         })
-                        if (!poToken.isNullOrBlank()) {
-                            put("serviceIntegrityDimensions", JSONObject().apply {
-                                put("poToken", poToken)
-                            })
-                        }
                     }
                 }
 
-                val playerUrl = if (isWebClient) {
-                    "https://www.youtube.com/youtubei/v1/player?key=${FloWaveConstants.INNERTUBE_KEY_WEB}&prettyPrint=false"
-                } else {
-                    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
-                }
+                val playerUrl = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
 
                 val reqBuilder = Request.Builder()
                     .url(playerUrl)
@@ -529,9 +544,10 @@ open class InnerTubeRepository(context: Context? = null) {
                     .header("User-Agent", clientConfig.userAgent)
                     .header("Content-Type", "application/json")
 
-                if (isWebClient) {
-                    reqBuilder.header("Origin", "https://music.youtube.com")
-                    reqBuilder.header("Referer", "https://music.youtube.com/")
+                clientConfig.clientNumber?.let { reqBuilder.header("X-YouTube-Client-Name", it) }
+                reqBuilder.header("X-YouTube-Client-Version", clientConfig.clientVersion)
+                if (clientConfig.clientName == "ANDROID_VR") {
+                    reqBuilder.header("Origin", "https://www.youtube.com")
                 }
 
                 val request = reqBuilder.build()
@@ -551,32 +567,47 @@ open class InnerTubeRepository(context: Context? = null) {
                                 "reason" to (playabilityStatus.optString("reason").take(200))
                             ))
                         } else {
-                            val streamingData = json.optJSONObject("streamingData")
-                            val adaptiveFormats = streamingData?.optJSONArray("adaptiveFormats")
-                                ?: streamingData?.optJSONArray("formats")
+                            val extractedUrl = InnerTubeParser.parsePlayerResponse(json, client)
+                            if (!extractedUrl.isNullOrBlank()) {
+                                logger?.info("online", "inner_tube_client_succeeded", context = mapOf(
+                                    "videoId" to videoId,
+                                    "client" to clientConfig.clientName
+                                ))
 
-                            if (adaptiveFormats != null && adaptiveFormats.length() > 0) {
-                                val extractedUrl = parseAudioUrl(adaptiveFormats)
-                                if (!extractedUrl.isNullOrBlank()) {
-                                    logger?.info("online", "inner_tube_client_succeeded", context = mapOf(
-                                        "videoId" to videoId,
-                                        "client" to clientConfig.clientName
-                                    ))
-                                    streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
-                                    val videoDetails = json.optJSONObject("videoDetails")
-                                    val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
-                                    val durationSec = lengthSecondsStr?.toLongOrNull()
-                                    if (durationSec != null) {
-                                        streamDurationCache[videoId] = durationSec * 1000L
-                                    }
-                                    return@withContext extractedUrl
-                                } else {
-                                    // SABR / URL-less format response detected
-                                    logger?.warn("online", "inner_tube_formats_url_less_or_sabr", context = mapOf(
-                                        "videoId" to videoId,
-                                        "client" to clientConfig.clientName
-                                    ))
+                                val requestHeaders = mutableMapOf<String, String>(
+                                    "User-Agent" to clientConfig.userAgent
+                                )
+                                clientConfig.clientNumber?.let { requestHeaders["X-YouTube-Client-Name"] = it }
+                                requestHeaders["X-YouTube-Client-Version"] = clientConfig.clientVersion
+                                if (clientConfig.clientName == "ANDROID_VR") {
+                                    requestHeaders["Origin"] = "https://www.youtube.com"
+                                    requestHeaders["Referer"] = "https://www.youtube.com/"
                                 }
+
+                                val resolvedSource = ResolvedStreamSource(
+                                    url = extractedUrl,
+                                    resolver = "inner_tube",
+                                    candidateKey = clientConfig.clientName,
+                                    userAgent = clientConfig.userAgent,
+                                    requestHeaders = requestHeaders
+                                )
+
+                                streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
+                                streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
+
+                                val videoDetails = json.optJSONObject("videoDetails")
+                                val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
+                                val durationSec = lengthSecondsStr?.toLongOrNull()
+                                if (durationSec != null) {
+                                    streamDurationCache[videoId] = durationSec * 1000L
+                                }
+                                return@withContext resolvedSource
+                            } else {
+                                // SABR / URL-less format response detected
+                                logger?.warn("online", "inner_tube_formats_url_less_or_sabr", context = mapOf(
+                                    "videoId" to videoId,
+                                    "client" to clientConfig.clientName
+                                ))
                             }
                         }
                     }
@@ -602,8 +633,16 @@ open class InnerTubeRepository(context: Context? = null) {
             val result = localStreamResolver.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")
             result.onSuccess { resolved ->
                 logger?.info("online", "embedded_resolver_succeeded", context = mapOf("videoId" to videoId))
+                val resolvedSource = ResolvedStreamSource(
+                    url = resolved,
+                    resolver = "embedded",
+                    candidateKey = "yt_dlp",
+                    userAgent = FloWaveConstants.USER_AGENT_DESKTOP,
+                    requestHeaders = mapOf("User-Agent" to FloWaveConstants.USER_AGENT_DESKTOP)
+                )
+                streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
                 streamUrlCache[videoId] = Pair(System.currentTimeMillis(), resolved)
-                return@withContext resolved
+                return@withContext resolvedSource
             }.onFailure { error ->
                 logger?.warn("online", "resolver_attempt_failed", context = mapOf(
                     "videoId" to videoId,
@@ -622,63 +661,8 @@ open class InnerTubeRepository(context: Context? = null) {
         throw java.io.IOException("All extraction attempts and fallback clients were exhausted for videoId: $videoId")
     }
 
-    private data class FormatCandidate(
-        val url: String,
-        val bitrate: Int,
-        val mimeType: String,
-        val itag: Int
-    )
-
     suspend fun parseAudioUrl(formats: JSONArray): String? {
-        var bestOpus: FormatCandidate? = null
-        var bestAac: FormatCandidate? = null
-        var bestOther: FormatCandidate? = null
-
-        for (i in 0 until formats.length()) {
-            val format = formats.optJSONObject(i) ?: continue
-
-            val url = if (format.has("url")) {
-                format.optString("url")
-            } else {
-                val cipherText = format.optString("signatureCipher").takeIf { it.isNotEmpty() }
-                    ?: format.optString("cipher").takeIf { it.isNotEmpty() }
-                if (!cipherText.isNullOrEmpty()) {
-                    try {
-                        YouTubeDecipherer.decipher(cipherText, client)
-                    } catch (e: Exception) {
-                        android.util.Log.e("InnerTubeRepository", "Failed to decipher format: ${e.message}")
-                        ""
-                    }
-                } else {
-                    ""
-                }
-            }
-
-            if (url.isEmpty() || !url.startsWith("http")) continue
-
-            val mimeType = format.optString("mimeType")
-            if (!mimeType.contains("audio/")) continue
-
-            val bitrate = format.optInt("bitrate", 0)
-            val itag = format.optInt("itag", 0)
-            val candidate = FormatCandidate(url, bitrate, mimeType, itag)
-
-            if (mimeType.contains("opus") || itag == 251) {
-                if (bestOpus == null || bitrate > bestOpus.bitrate) {
-                    bestOpus = candidate
-                }
-            } else if (mimeType.contains("mp4a") || itag == 140) {
-                if (bestAac == null || bitrate > bestAac.bitrate) {
-                    bestAac = candidate
-                }
-            } else {
-                if (bestOther == null || bitrate > bestOther.bitrate) {
-                    bestOther = candidate
-                }
-            }
-        }
-
-        return bestOpus?.url ?: bestAac?.url ?: bestOther?.url
+        return InnerTubeParser.parseAudioUrl(formats, client)
     }
 
     suspend fun fetchLrcLyrics(trackTitle: String, artistName: String): List<LrcLine> = withContext(Dispatchers.IO) {

@@ -20,6 +20,7 @@ class InnerTubeSearchAndPlayerTest {
     fun `inner tube client fallback chain uses valid clients and complete device contexts`() {
         val chain = InnerTubeClients.FALLBACK_CHAIN
         assertTrue(chain.isNotEmpty())
+        assertEquals(3, chain.size)
         
         // Ensure no invalid or deprecated clients exist in the fallback chain
         for (client in chain) {
@@ -28,17 +29,30 @@ class InnerTubeSearchAndPlayerTest {
             assertTrue("User agent must not be empty", client.userAgent.isNotBlank())
         }
 
-        // Verify Android client context completeness
-        val android = chain.first { it.clientName == "ANDROID_MUSIC" }
-        assertEquals(30, android.androidSdkVersion)
-        assertEquals("Android", android.osName)
-        assertEquals("11", android.osVersion)
+        // Verify Android VR client context completeness
+        val vr = chain.first { it.clientName == "ANDROID_VR" }
+        assertEquals("Oculus", vr.deviceMake)
+        assertEquals("Quest 2", vr.deviceModel)
+        assertEquals("Android", vr.osName)
+        assertEquals("12", vr.osVersion)
+        assertEquals(32, vr.androidSdkVersion)
+        assertEquals("1.56.21", vr.clientVersion)
+        assertEquals("28", vr.clientNumber)
 
         // Verify iOS client context completeness
         val ios = chain.first { it.clientName == "IOS" }
         assertEquals("Apple", ios.deviceMake)
-        assertEquals("iPhone15,2", ios.deviceModel)
+        assertEquals("iPhone16,2", ios.deviceModel)
         assertEquals("iPhone", ios.osName)
+        assertEquals("17.5.1.21F90", ios.osVersion)
+        assertEquals("19.29.1", ios.clientVersion)
+        assertEquals("5", ios.clientNumber)
+
+        // Verify Android TestSuite client context completeness
+        val testsuite = chain.first { it.clientName == "ANDROID_TESTSUITE" }
+        assertEquals(32, testsuite.androidSdkVersion)
+        assertEquals("1.9", testsuite.clientVersion)
+        assertEquals("30", testsuite.clientNumber)
     }
 
     @Test

@@ -99,4 +99,49 @@ class InnerTubeParserAndSABRTest {
         val extracted = repository.parseAudioUrl(formats)
         assertNull(extracted)
     }
+
+    @Test
+    fun testParsePlayerResponseWithSabrOnlyRejects() = runBlocking {
+        val json = JSONObject().apply {
+            put("playabilityStatus", JSONObject().apply { put("status", "OK") })
+            put("streamingData", JSONObject().apply {
+                put("serverAbrStreamingUrl", "https://rr1---sn-abc.googlevideo.com/videoplayback?sabr=1")
+                put("adaptiveFormats", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("itag", 251)
+                        put("mimeType", "audio/webm; codecs=\"opus\"")
+                        // No URL
+                    })
+                })
+            })
+        }
+        val extracted = com.example.flowave.data.remote.InnerTubeParser.parsePlayerResponse(json)
+        assertNull(extracted)
+    }
+
+    @Test
+    fun testParsePlayerResponseHlsManifestFallback() = runBlocking {
+        val json = JSONObject().apply {
+            put("playabilityStatus", JSONObject().apply { put("status", "OK") })
+            put("streamingData", JSONObject().apply {
+                put("serverAbrStreamingUrl", "https://rr1---sn-abc.googlevideo.com/videoplayback?sabr=1")
+                put("hlsManifestUrl", "https://manifest.googlevideo.com/api/manifest/hls_variant/test.m3u8")
+                put("adaptiveFormats", JSONArray())
+            })
+        }
+        val extracted = com.example.flowave.data.remote.InnerTubeParser.parsePlayerResponse(json)
+        assertEquals("https://manifest.googlevideo.com/api/manifest/hls_variant/test.m3u8", extracted)
+    }
+
+    @Test
+    fun testPoTokenGeneratorRejectsStubTokens() {
+        org.junit.Assert.assertFalse(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(null))
+        org.junit.Assert.assertFalse(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(""))
+        org.junit.Assert.assertFalse(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken("stub"))
+        org.junit.Assert.assertFalse(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken("stub_token_12345678"))
+        org.junit.Assert.assertFalse(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken("placeholder_token"))
+        org.junit.Assert.assertFalse(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken("dummy_token_9999"))
+        org.junit.Assert.assertFalse(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken("short"))
+        org.junit.Assert.assertTrue(com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken("valid_runtime_token_abcdef123456"))
+    }
 }

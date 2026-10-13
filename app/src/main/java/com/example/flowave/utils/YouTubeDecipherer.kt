@@ -44,7 +44,8 @@ object YouTubeDecipherer {
     /**
      * Deciphers a YouTube signature cipher string and returns the fully working direct stream URL.
      */
-    suspend fun decipher(cipherText: String, okHttpClient: OkHttpClient): String = withContext(Dispatchers.IO) {
+    suspend fun decipher(cipherText: String, okHttpClient: OkHttpClient? = null): String = withContext(Dispatchers.IO) {
+        val client = okHttpClient ?: OkHttpClient()
         val params = parseQueryString(cipherText)
         val s = params["s"] ?: return@withContext ""
         val url = params["url"] ?: return@withContext ""
@@ -62,7 +63,7 @@ object YouTubeDecipherer {
             s
         }
 
-        val ops = getDecipherOps(okHttpClient)
+        val ops = getDecipherOps(client)
         val decipheredSignature = if (ops.isNotEmpty()) {
             applyOps(decodedSignature, ops)
         } else {

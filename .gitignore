@@ -16,3 +16,4 @@
 local.properties
 .env
 debug.keystore
+gemini_export/

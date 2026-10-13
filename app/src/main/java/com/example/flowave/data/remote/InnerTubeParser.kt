@@ -356,4 +356,138 @@ object InnerTubeParser {
         }
         return "https://i.ytimg.com/vi/$videoId/maxresdefault.jpg"
     }
+
+    data class FormatCandidate(
+        val url: String,
+        val bitrate: Int,
+        val mimeType: String,
+        val itag: Int
+    )
+
+    /**
+     * Parses the /youtubei/v1/player JSON response, inspecting streamingData.adaptiveFormats
+     * (and formats as fallback), filtering for playable audio streams, prioritizing itag 251 (Opus)
+     * and itag 140 (M4A/AAC) or highest bitrate audio, rejecting SABR-only responses without direct
+     * format URLs, and accepting hlsManifestUrl as secondary fallback.
+     */
+    suspend fun parsePlayerResponse(json: JSONObject, okHttpClient: okhttp3.OkHttpClient? = null): String? {
+        val playabilityStatus = json.optJSONObject("playabilityStatus")
+        val status = playabilityStatus?.optString("status")
+        if (status != null && status != "OK") {
+            return null
+        }
+
+        val streamingData = json.optJSONObject("streamingData") ?: return null
+
+        // 1. Inspect adaptiveFormats first, then formats as fallback
+        val adaptiveFormats = streamingData.optJSONArray("adaptiveFormats")
+        var extractedUrl = if (adaptiveFormats != null && adaptiveFormats.length() > 0) {
+            parseAudioUrl(adaptiveFormats, okHttpClient)
+        } else {
+            null
+        }
+
+        if (extractedUrl.isNullOrBlank()) {
+            val formats = streamingData.optJSONArray("formats")
+            if (formats != null && formats.length() > 0) {
+                extractedUrl = parseAudioUrl(formats, okHttpClient)
+            }
+        }
+
+        // 2. Return extracted direct audio URL if valid
+        if (!extractedUrl.isNullOrBlank()) {
+            return extractedUrl
+        }
+
+        // 3. Fallback: Accept hlsManifestUrl if no direct/adaptive format URL is available
+        val hlsUrl = streamingData.optString("hlsManifestUrl").takeIf {
+            it.startsWith("http://") || it.startsWith("https://")
+        }
+        if (!hlsUrl.isNullOrBlank()) {
+            return hlsUrl
+        }
+
+        // 4. If only serverAbrStreamingUrl is present without direct formats, reject (return null)
+        // so the caller immediately advances to the next fallback client profile in the chain.
+        return null
+    }
+
+    /**
+     * Filters for audio streams (mimeType starting with "audio/"), checks for valid direct
+     * http/https URL (or deciphers signatureCipher via YouTubeDecipherer ONLY if direct URL is absent),
+     * and prioritizes itag 251 (Opus) and itag 140 (M4A/AAC) or highest bitrate audio.
+     */
+    suspend fun parseAudioUrl(formats: JSONArray, okHttpClient: okhttp3.OkHttpClient? = null): String? {
+        var bestOpus251: FormatCandidate? = null
+        var bestOpusOther: FormatCandidate? = null
+        var bestAac140: FormatCandidate? = null
+        var bestAacOther: FormatCandidate? = null
+        var bestOther: FormatCandidate? = null
+
+        for (i in 0 until formats.length()) {
+            val format = formats.optJSONObject(i) ?: continue
+
+            val mimeType = format.optString("mimeType")
+            if (!mimeType.startsWith("audio/") && !mimeType.contains("audio/")) continue
+
+            val rawUrl = format.optString("url")
+            val url = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+                rawUrl
+            } else {
+                // Decipher signatureCipher only if direct url is absent
+                val cipherText = format.optString("signatureCipher").takeIf { it.isNotEmpty() }
+                    ?: format.optString("cipher").takeIf { it.isNotEmpty() }
+                if (!cipherText.isNullOrEmpty()) {
+                    try {
+                        com.example.flowave.utils.YouTubeDecipherer.decipher(cipherText, okHttpClient)
+                    } catch (e: Exception) {
+                        ""
+                    }
+                } else {
+                    ""
+                }
+            }
+
+            if (url.isBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) continue
+
+            val bitrate = format.optInt("bitrate", 0)
+            val itag = format.optInt("itag", 0)
+            val candidate = FormatCandidate(url, bitrate, mimeType, itag)
+
+            val isOpus = itag == 251 || itag == 250 || itag == 249 || mimeType.contains("opus") || mimeType.contains("webm")
+            val isAac = itag == 140 || itag == 141 || mimeType.contains("mp4a") || mimeType.contains("aac") || mimeType.contains("mp4")
+
+            if (isOpus) {
+                if (itag == 251) {
+                    if (bestOpus251 == null || bitrate > bestOpus251.bitrate) {
+                        bestOpus251 = candidate
+                    }
+                } else {
+                    if (bestOpusOther == null || bitrate > bestOpusOther.bitrate) {
+                        bestOpusOther = candidate
+                    }
+                }
+            } else if (isAac) {
+                if (itag == 140) {
+                    if (bestAac140 == null || bitrate > bestAac140.bitrate) {
+                        bestAac140 = candidate
+                    }
+                } else {
+                    if (bestAacOther == null || bitrate > bestAacOther.bitrate) {
+                        bestAacOther = candidate
+                    }
+                }
+            } else {
+                if (bestOther == null || bitrate > bestOther.bitrate) {
+                    bestOther = candidate
+                }
+            }
+        }
+
+        return bestOpus251?.url
+            ?: bestOpusOther?.url
+            ?: bestAac140?.url
+            ?: bestAacOther?.url
+            ?: bestOther?.url
+    }
 }

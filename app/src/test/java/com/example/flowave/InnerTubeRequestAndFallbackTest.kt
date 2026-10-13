@@ -13,12 +13,11 @@ class InnerTubeRequestAndFallbackTest {
     @Test
     fun testInnerTubeClientsFallbackChainOrdering() {
         val chain = InnerTubeClients.FALLBACK_CHAIN
-        assertEquals(4, chain.size)
-        // ANDROID_TESTSUITE should be primary (bypasses bot challenges without web PO token)
-        assertEquals("ANDROID_TESTSUITE", chain[0].clientName)
+        assertEquals(3, chain.size)
+        // ANDROID_VR is primary, followed by IOS, then ANDROID_TESTSUITE
+        assertEquals("ANDROID_VR", chain[0].clientName)
         assertEquals("IOS", chain[1].clientName)
-        assertEquals("ANDROID_MUSIC", chain[2].clientName)
-        assertEquals("WEB_REMIX", chain[3].clientName)
+        assertEquals("ANDROID_TESTSUITE", chain[2].clientName)
     }
 
     @Test
@@ -38,11 +37,14 @@ class InnerTubeRequestAndFallbackTest {
 
     @Test
     fun testClientAwareUserAgents() {
-        val testsuite = InnerTubeClients.ANDROID_TESTSUITE
-        assertTrue(testsuite.userAgent.contains("com.google.android.youtube"))
+        val vr = InnerTubeClients.ANDROID_VR
+        assertTrue(vr.userAgent.contains("youtube.vr.oculus"))
 
         val ios = InnerTubeClients.IOS
         assertTrue(ios.userAgent.contains("com.google.ios.youtube") || ios.userAgent.contains("iPhone"))
+
+        val testsuite = InnerTubeClients.ANDROID_TESTSUITE
+        assertTrue(testsuite.userAgent.contains("com.google.android.youtube"))
 
         val web = InnerTubeClients.WEB_REMIX
         assertTrue(web.userAgent.contains("Mozilla") || web.userAgent.contains("Windows"))
