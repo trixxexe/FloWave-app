@@ -25,6 +25,7 @@ class FloWaveDownloader(
     private val downloadDao = AppDatabase.getDatabase(context).downloadDao()
     private val innerTubeRepo = InnerTubeRepository.getInstance(context)
     private val sealEngine = SealStyleDownloadEngine(context)
+    private val nativeDownloader = FloWaveNativeDownloader(context, innerTubeRepo)
 
     val allDownloadEntries: Flow<List<DownloadEntry>> = downloadDao.getAllDownloads()
 
@@ -56,7 +57,12 @@ class FloWaveDownloader(
                 context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: context.filesDir,
                 "FloWaveDownloads"
             )
-            sealEngine.executeDownload(info.webpageUrl, outputDir, options).collect { state ->
+            val downloadFlow = if (sealEngine.isAvailable()) {
+                sealEngine.executeDownload(info.webpageUrl, outputDir, options)
+            } else {
+                nativeDownloader.download(info.webpageUrl, outputDir, options)
+            }
+            downloadFlow.collect { state ->
                 when (state) {
                     is DownloadState.Downloading -> downloadDao.updateProgress(
                         id, (state.progress / 100f).coerceIn(0f, 1f), 0L, DownloadStatus.DOWNLOADING
@@ -156,8 +162,12 @@ class FloWaveDownloader(
             )
         )
 
-        val outputDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: context.filesDir
-        sealEngine.executeDownload(sourceUrl, outputDir).collect { state ->
+        val downloadFlow = if (sealEngine.isAvailable()) {
+            sealEngine.executeDownload(sourceUrl, outputDir)
+        } else {
+            nativeDownloader.download(sourceUrl, outputDir)
+        }
+        downloadFlow.collect { state ->
             when (state) {
                 is DownloadState.Downloading -> downloadDao.updateProgress(
                     track.id,

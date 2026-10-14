@@ -74,6 +74,13 @@ class FloWaveRepository(private val context: Context) {
                 lastPlayedTimestamp = System.currentTimeMillis()
             )
             trackDao.updateTrack(updated)
+        } else if (track.isOnline) {
+            trackDao.insertTrack(
+                track.copy(
+                    playCount = 1,
+                    lastPlayedTimestamp = System.currentTimeMillis()
+                )
+            )
         }
         statDao.insertStat(
             ListeningStat(

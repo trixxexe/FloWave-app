@@ -3,20 +3,22 @@ package com.example.flowave.downloader
 import android.content.Context
 import android.util.Log
 import com.example.flowave.FloWaveRuntime
+import com.example.flowave.audio.PlaybackIdentity
+import com.example.flowave.data.remote.InnerTubeRepository
+import com.example.flowave.diagnostics.FloWaveLogger
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
-import org.json.JSONObject
-import com.example.flowave.diagnostics.FloWaveLogger
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runInterruptible
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
@@ -25,27 +27,36 @@ import java.util.UUID
  *
  * This uses the embedded yt-dlp/FFmpeg Android runtime shipped by the
  * GPL-3.0 youtubedl-android project (the same runtime family used by Seal).
- * It deliberately does not execute a downloaded Linux binary, which cannot run
- * reliably on Android and was the reason the previous downloader failed.
+ * If the yt-dlp binary is a stub/placeholder or fails execution, it automatically
+ * and cleanly falls back to pure-Kotlin native InnerTube resolution and download.
  */
 class SealStyleDownloadEngine(private val appContext: Context? = null) {
     private val logger = appContext?.applicationContext?.let { FloWaveLogger.getInstance(it) }
 
+    fun isAvailable(): Boolean {
+        val ctx = appContext ?: com.example.flowave.FloWaveApplication.appContext
+        return YtDlpBinaryValidator.isRuntimeAvailable(ctx)
+    }
+
     suspend fun inspect(input: String): Result<List<DownloadMediaInfo>> = withContext(Dispatchers.IO) {
         val operation = if (DownloadInput.isHttpUrl(input)) "url_metadata" else "keyword_search"
         val startedAt = System.nanoTime()
+        val ctx = appContext ?: com.example.flowave.FloWaveApplication.appContext
         logger?.info("downloader", "inspect_started", context = mapOf(
             "operation" to operation,
             "inputLength" to input.length
         ))
-        if (!FloWaveRuntime.awaitReady(15_000L)) {
+
+        // If embedded runtime is a stub or unavailable, fall back to pure-Kotlin native search
+        if (!isAvailable() || !FloWaveRuntime.awaitReady(2_000L)) {
+            logger?.info("downloader", "inspect_stub_or_unavailable_fallback_native", context = mapOf("input" to input))
+            if (ctx != null) {
+                return@withContext fallbackNativeInspect(ctx, input)
+            }
             val error = IllegalStateException("The embedded yt-dlp runtime is unavailable")
-            logger?.error("downloader", "inspect_runtime_unavailable", context = mapOf(
-                "operation" to operation,
-                "durationMs" to elapsedMs(startedAt)
-            ), throwable = error)
-            return@withContext Result.failure<List<DownloadMediaInfo>>(error)
+            return@withContext Result.failure(error)
         }
+
         try {
             val request = YoutubeDLRequest(DownloadInput.sourceFor(input)).apply {
                 addOption("--dump-single-json")
@@ -76,120 +87,185 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 "failureClass" to "timeout",
                 "durationMs" to elapsedMs(startedAt)
             ), throwable = error)
-            Result.failure<List<DownloadMediaInfo>>(IllegalStateException("yt-dlp inspection timed out", error))
+            if (ctx != null) {
+                return@withContext fallbackNativeInspect(ctx, input)
+            }
+            Result.failure(IllegalStateException("yt-dlp inspection timed out", error))
         } catch (error: CancellationException) {
             logger?.debug("downloader", "inspect_cancelled", context = mapOf("operation" to operation))
             throw error
         } catch (error: Throwable) {
-            logger?.error("downloader", "inspect_failed", context = mapOf(
+            logger?.warn("downloader", "inspect_failed_fallback_native", context = mapOf(
                 "operation" to operation,
                 "failureClass" to error::class.simpleName.orEmpty(),
                 "durationMs" to elapsedMs(startedAt)
             ), throwable = error)
-            Result.failure<List<DownloadMediaInfo>>(error)
+            if (ctx != null) {
+                return@withContext fallbackNativeInspect(ctx, input)
+            }
+            Result.failure(error)
+        }
+    }
+
+    private suspend fun fallbackNativeInspect(context: Context, input: String): Result<List<DownloadMediaInfo>> {
+        return runCatching {
+            val innerTube = InnerTubeRepository.getInstance(context)
+            val videoId = PlaybackIdentity.extractVideoId(input)
+            if (videoId != null) {
+                val meta = innerTube.getTrackMetadata(videoId)
+                if (meta != null) {
+                    listOf(
+                        DownloadMediaInfo(
+                            id = meta.id,
+                            webpageUrl = "https://www.youtube.com/watch?v=${meta.id}",
+                            title = meta.title,
+                            creator = meta.artist,
+                            thumbnailUrl = meta.thumbnailUrl,
+                            durationSeconds = innerTube.parseDurationText(meta.durationText) / 1000L
+                        )
+                    )
+                } else emptyList()
+            } else {
+                val results = innerTube.searchTracks(input)
+                results.map { item ->
+                    DownloadMediaInfo(
+                        id = item.id,
+                        webpageUrl = "https://www.youtube.com/watch?v=${item.id}",
+                        title = item.title,
+                        creator = item.artist,
+                        thumbnailUrl = item.thumbnailUrl,
+                        durationSeconds = innerTube.parseDurationText(item.durationText) / 1000L
+                    )
+                }
+            }
         }
     }
 
     fun executeDownload(url: String, outputDir: File): Flow<DownloadState> =
         executeDownload(url, outputDir, DownloadOptions())
 
-    fun executeDownload(url: String, outputDir: File, options: DownloadOptions): Flow<DownloadState> = channelFlow {
-        val startedAt = System.nanoTime()
-        logger?.info("downloader", "download_started", context = mapOf(
-            "kind" to options.kind.name.lowercase(),
-            "inputIsUrl" to DownloadInput.isHttpUrl(url)
-        ))
-        send(DownloadState.Initializing)
-        if (!FloWaveRuntime.awaitReady(15_000L)) {
-            logger?.error("downloader", "download_runtime_unavailable")
-            send(DownloadState.Error("The embedded yt-dlp runtime is unavailable. Restart FloWave and try again."))
-            return@channelFlow
-        }
-        if (!DownloadInput.isHttpUrl(url)) {
-            send(DownloadState.Error("Only HTTP(S) video URLs are supported."))
-            return@channelFlow
-        }
-        if (!outputDir.exists() && !outputDir.mkdirs()) {
-            send(DownloadState.Error("Unable to create the download directory."))
-            return@channelFlow
+    fun executeDownload(url: String, outputDir: File, options: DownloadOptions): Flow<DownloadState> {
+        val ctx = appContext ?: com.example.flowave.FloWaveApplication.appContext
+        // If embedded runtime is unavailable or stub detected, directly return pure-Kotlin native downloader
+        if (!isAvailable() && ctx != null) {
+            logger?.info("downloader", "ytdlp_stub_direct_fallback_native_download", context = mapOf("url" to url))
+            return FloWaveNativeDownloader(ctx).download(url, outputDir, options)
         }
 
-        send(DownloadState.Preparing)
-        val processId = "flowave-${UUID.randomUUID()}"
-        val template = File(outputDir, "%(title).200B [%(id)s].%(ext)s").absolutePath
-        val request = YoutubeDLRequest(url).apply {
-            addOption("--no-playlist")
+        return channelFlow {
+            val startedAt = System.nanoTime()
+            logger?.info("downloader", "download_started", context = mapOf(
+                "kind" to options.kind.name.lowercase(),
+                "inputIsUrl" to DownloadInput.isHttpUrl(url)
+            ))
+            send(DownloadState.Initializing)
+            if (!FloWaveRuntime.awaitReady(15_000L) || !isAvailable()) {
+                logger?.info("downloader", "ytdlp_not_ready_fallback_native", context = mapOf("url" to url))
+                if (ctx != null) {
+                    FloWaveNativeDownloader(ctx).download(url, outputDir, options).collect { send(it) }
+                    return@channelFlow
+                }
+                send(DownloadState.Error("The embedded yt-dlp runtime is unavailable. Restart FloWave and try again."))
+                return@channelFlow
+            }
+            if (!DownloadInput.isHttpUrl(url)) {
+                send(DownloadState.Error("Only HTTP(S) video URLs are supported."))
+                return@channelFlow
+            }
+            if (!outputDir.exists() && !outputDir.mkdirs()) {
+                send(DownloadState.Error("Unable to create the download directory."))
+                return@channelFlow
+            }
+
+            send(DownloadState.Preparing)
+            val processId = "flowave-${UUID.randomUUID()}"
+            val template = File(outputDir, "%(title).200B [%(id)s].%(ext)s").absolutePath
+            val request = YoutubeDLRequest(url).apply {
+                addOption("--no-playlist")
                 addOption("--extractor-args", "youtube:player_client=android,ios,web")
-            addOption("--no-mtime")
-            addOption("--no-overwrites")
-            addOption("--restrict-filenames")
-            addOption("--newline")
-            addOption("--retries", "3")
-            addOption("--fragment-retries", "3")
-            addOption("--socket-timeout", "30")
-            if (options.kind == DownloadMediaKind.AUDIO) {
-                addOption("-x")
-                addOption("--audio-format", options.audioFormat)
-                addOption("--audio-quality", options.audioQuality)
-                addOption("--embed-metadata")
-                addOption("--embed-thumbnail")
-            } else {
-                addOption("-f", options.formatSelector ?: "bv*+ba/b")
-                addOption("--merge-output-format", "mp4")
+                addOption("--no-mtime")
+                addOption("--no-overwrites")
+                addOption("--restrict-filenames")
+                addOption("--newline")
+                addOption("--retries", "3")
+                addOption("--fragment-retries", "3")
+                addOption("--socket-timeout", "30")
+                if (options.kind == DownloadMediaKind.AUDIO) {
+                    addOption("-x")
+                    addOption("--audio-format", options.audioFormat)
+                    addOption("--audio-quality", options.audioQuality)
+                    addOption("--embed-metadata")
+                    addOption("--embed-thumbnail")
+                } else {
+                    addOption("-f", options.formatSelector ?: "bv*+ba/b")
+                    addOption("--merge-output-format", "mp4")
+                }
+                if (options.kind == DownloadMediaKind.AUDIO) {
+                    options.formatSelector?.let { addOption("-f", it) }
+                }
+                addOption("-o", template)
+                addOption("--print", "after_move:filepath")
             }
-            if (options.kind == DownloadMediaKind.AUDIO) {
-                options.formatSelector?.let { addOption("-f", it) }
-            }
-            addOption("-o", template)
-            // Print the final post-processing path so callers never have to
-            // guess whether yt-dlp produced m4a, webm, or another container.
-            addOption("--print", "after_move:filepath")
-        }
 
-        try {
-            val response = withTimeout(6 * 60_000L) {
-                runInterruptible(Dispatchers.IO) {
-                    executeWithUpdateRetry(request, processId) { progress, _, line ->
-                        trySend(DownloadState.Downloading(progress.toFloat(), parseSpeed(line), parseEta(line)))
-                        if (line.contains("ExtractAudio", ignoreCase = true) ||
-                            line.contains("Post-process", ignoreCase = true) ||
-                            line.contains("Deleting original", ignoreCase = true)
-                        ) {
-                            trySend(DownloadState.PostProcessing("Converting audio…"))
+            try {
+                val response = withTimeout(6 * 60_000L) {
+                    runInterruptible(Dispatchers.IO) {
+                        executeWithUpdateRetry(request, processId) { progress, _, line ->
+                            trySend(DownloadState.Downloading(progress.toFloat(), parseSpeed(line), parseEta(line)))
+                            if (line.contains("ExtractAudio", ignoreCase = true) ||
+                                line.contains("Post-process", ignoreCase = true) ||
+                                line.contains("Deleting original", ignoreCase = true)
+                            ) {
+                                trySend(DownloadState.PostProcessing("Converting audio…"))
+                            }
                         }
                     }
                 }
-            }
-            val outputPath = findOutputPath(response.out, outputDir)
-            if (outputPath == null) {
-                logger?.error("downloader", "download_output_missing", context = mapOf("durationMs" to elapsedMs(startedAt)))
-                send(DownloadState.Error("yt-dlp completed without producing a media file."))
-            } else {
-                logger?.info("downloader", "download_completed", context = mapOf(
-                    "outputBytes" to File(outputPath).length(),
+                val outputPath = findOutputPath(response.out, outputDir)
+                if (outputPath == null) {
+                    logger?.error("downloader", "download_output_missing", context = mapOf("durationMs" to elapsedMs(startedAt)))
+                    if (ctx != null) {
+                        logger?.info("downloader", "missing_output_fallback_native", context = mapOf("url" to url))
+                        FloWaveNativeDownloader(ctx).download(url, outputDir, options).collect { send(it) }
+                        return@channelFlow
+                    }
+                    send(DownloadState.Error("yt-dlp completed without producing a media file."))
+                } else {
+                    logger?.info("downloader", "download_completed", context = mapOf(
+                        "outputBytes" to File(outputPath).length(),
+                        "durationMs" to elapsedMs(startedAt)
+                    ))
+                    send(DownloadState.Success(outputPath))
+                }
+            } catch (error: TimeoutCancellationException) {
+                logger?.error("downloader", "download_timeout", context = mapOf(
+                    "processId" to processId,
                     "durationMs" to elapsedMs(startedAt)
-                ))
-                send(DownloadState.Success(outputPath))
+                ), throwable = error)
+                if (ctx != null) {
+                    logger?.info("downloader", "timeout_fallback_native", context = mapOf("url" to url))
+                    FloWaveNativeDownloader(ctx).download(url, outputDir, options).collect { send(it) }
+                    return@channelFlow
+                }
+                send(DownloadState.Error("yt-dlp timed out. Check the network and try again."))
+            } catch (error: Throwable) {
+                Log.e(TAG, "Download failed with yt-dlp, falling back to native", error)
+                logger?.error("downloader", "download_failed_fallback_native", context = mapOf(
+                    "failureClass" to error::class.simpleName.orEmpty(),
+                    "durationMs" to elapsedMs(startedAt)
+                ), throwable = error)
+                if (ctx != null) {
+                    FloWaveNativeDownloader(ctx).download(url, outputDir, options).collect { send(it) }
+                    return@channelFlow
+                }
+                if (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                    send(DownloadState.Error(error.message ?: "Download failed."))
+                } else {
+                    send(DownloadState.Cancelled)
+                }
             }
-        } catch (error: TimeoutCancellationException) {
-            logger?.error("downloader", "download_timeout", context = mapOf(
-                "processId" to processId,
-                "durationMs" to elapsedMs(startedAt)
-            ), throwable = error)
-            send(DownloadState.Error("yt-dlp timed out. Check the network and try again."))
-        } catch (error: Throwable) {
-            Log.e(TAG, "Download failed", error)
-            logger?.error("downloader", "download_failed", context = mapOf(
-                "failureClass" to error::class.simpleName.orEmpty(),
-                "durationMs" to elapsedMs(startedAt)
-            ), throwable = error)
-            if (kotlinx.coroutines.currentCoroutineContext().isActive) {
-                send(DownloadState.Error(error.message ?: "Download failed."))
-            } else {
-                send(DownloadState.Cancelled)
-            }
-        }
-    }.flowOn(Dispatchers.IO)
+        }.flowOn(Dispatchers.IO)
+    }
 
     private fun parseMediaInfo(stdout: String): List<DownloadMediaInfo> {
         val root = JSONObject(stdout.trim())
@@ -218,12 +294,21 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
         }
     }
 
-    /** Resolves a playable audio URL through the same embedded yt-dlp runtime. */
+    /** Resolves a playable audio URL through yt-dlp, cleanly falling back to native InnerTube on failure. */
     suspend fun resolveAudioUrl(url: String): Result<String> = withContext(Dispatchers.IO) {
-        if (!FloWaveRuntime.awaitReady(15_000L)) {
-            logger?.debug("downloader", "playback_runtime_unavailable")
+        val ctx = appContext ?: com.example.flowave.FloWaveApplication.appContext
+        val videoId = PlaybackIdentity.extractVideoId(url)
+
+        if (!isAvailable() || !FloWaveRuntime.awaitReady(2_000L)) {
+            logger?.debug("downloader", "playback_runtime_unavailable_fallback_native")
+            if (videoId != null && ctx != null) {
+                return@withContext runCatching {
+                    InnerTubeRepository.getInstance(ctx).getStreamResolution(videoId).url
+                }
+            }
             return@withContext Result.failure(IllegalStateException("yt-dlp runtime unavailable"))
         }
+
         try {
             val request = YoutubeDLRequest(url).apply {
                 addOption("--no-playlist")
@@ -247,14 +332,24 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 ?: error("yt-dlp returned no playable URL")
             Result.success(resolved)
         } catch (error: TimeoutCancellationException) {
-            logger?.warn("downloader", "playback_resolver_timeout", throwable = error)
+            logger?.warn("downloader", "playback_resolver_timeout_fallback_native", throwable = error)
+            if (videoId != null && ctx != null) {
+                return@withContext runCatching {
+                    InnerTubeRepository.getInstance(ctx).getStreamResolution(videoId).url
+                }
+            }
             Result.failure(IllegalStateException("yt-dlp resolver timed out", error))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            logger?.warn("downloader", "playback_resolver_failed", context = mapOf(
+            logger?.warn("downloader", "playback_resolver_failed_fallback_native", context = mapOf(
                 "failureClass" to error::class.simpleName.orEmpty()
             ), throwable = error)
+            if (videoId != null && ctx != null) {
+                return@withContext runCatching {
+                    InnerTubeRepository.getInstance(ctx).getStreamResolution(videoId).url
+                }
+            }
             Result.failure(error)
         }
     }
@@ -296,7 +391,6 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 val ctx = appContext?.applicationContext ?: com.example.flowave.FloWaveApplication.appContext
                 if (ctx != null) {
                     try {
-                        // Reactive auto-updater for BotGuard signatures
                         YoutubeDL.getInstance().updateYoutubeDL(
                             ctx, YoutubeDL.UpdateChannel.NIGHTLY
                         )

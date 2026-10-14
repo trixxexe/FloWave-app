@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.flowave.FloWaveRuntime
 import com.example.flowave.FloWaveApplication
 import com.example.flowave.downloader.SealStyleDownloadEngine
+import com.example.flowave.downloader.YtDlpBinaryValidator
 import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.Track
 import com.example.flowave.data.model.LrcLine
@@ -339,7 +340,7 @@ open class InnerTubeRepository(context: Context? = null) {
         if (tracks.isNotEmpty()) return@withContext tracks
 
         // ENGINE 2: Embedded yt-dlp search fallback (On-device fallback)
-        if (FloWaveRuntime.awaitReady(5_000L)) {
+        if (YtDlpBinaryValidator.isRuntimeAvailable(appContext) && FloWaveRuntime.awaitReady(2_000L)) {
             try {
                 val ytDlpResults = localStreamResolver.inspect("ytsearch15:$query").getOrNull()
                 if (!ytDlpResults.isNullOrEmpty()) {
@@ -629,7 +630,7 @@ open class InnerTubeRepository(context: Context? = null) {
         }
 
         // 2. Embedded yt-dlp resolver (Safe, on-device, handles BotGuard & signature challenges)
-        if (FloWaveRuntime.awaitReady(10_000L)) {
+        if (YtDlpBinaryValidator.isRuntimeAvailable(appContext) && FloWaveRuntime.awaitReady(2_000L)) {
             val result = localStreamResolver.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")
             result.onSuccess { resolved ->
                 logger?.info("online", "embedded_resolver_succeeded", context = mapOf("videoId" to videoId))

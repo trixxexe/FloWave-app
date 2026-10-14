@@ -73,6 +73,19 @@ fun ExploreScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        if (onlineTracks.isEmpty()) {
+            isLoading = true
+            try {
+                onlineTracks = innerTubeRepo.getTrendingTracks()
+            } catch (e: Exception) {
+                // Ignore failure when offline
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -196,6 +209,13 @@ fun ExploreScreen(
             if (currentActiveQuery.isNotEmpty()) {
                 Text(
                     text = "Results for \"$currentActiveQuery\" (${onlineTracks.size})",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            } else if (onlineTracks.isNotEmpty()) {
+                Text(
+                    text = "Trending & Popular Online (${onlineTracks.size})",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
