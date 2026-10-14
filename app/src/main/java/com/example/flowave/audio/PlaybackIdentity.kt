@@ -11,55 +11,49 @@ import javax.net.ssl.SSLException
 object PlaybackIdentity {
     const val ONLINE_PREFIX = "yt_"
 
-    fun extractVideoId(uri: Uri?): String? {
-        if (uri == null) return null
-        val scheme = uri.scheme?.lowercase()
-        if (scheme == "flowave") {
-            val authority = uri.authority
-            if (authority == "youtube") {
-                return uri.lastPathSegment?.takeIf { it.isNotBlank() }
-            }
-            if (!authority.isNullOrBlank() && (uri.path.isNullOrEmpty() || uri.path == "/")) {
-                return authority
-            }
-            return uri.lastPathSegment?.takeIf { it.isNotBlank() }
+    fun extractVideoId(uriStr: String?): String? {
+        if (uriStr.isNullOrBlank()) return null
+        val s = uriStr.trim()
+        if (s.startsWith("flowave://youtube/", ignoreCase = true)) {
+            return s.substringAfter("flowave://youtube/").substringBefore('?').substringBefore('#').substringBefore('/').takeIf { it.isNotBlank() }
         }
-        val host = uri.host?.lowercase().orEmpty()
-        if (host.contains("youtube.com")) {
-            return uri.getQueryParameter("v")?.takeIf { it.isNotBlank() }
+        if (s.startsWith("flowave://", ignoreCase = true)) {
+            return s.substringAfter("flowave://").substringBefore('?').substringBefore('#').substringBefore('/').takeIf { it.isNotBlank() }
         }
-        if (host.contains("youtu.be")) {
-            return uri.lastPathSegment?.takeIf { it.isNotBlank() }
+        if (s.contains("youtube.com", ignoreCase = true)) {
+            val vParam = Regex("[?&]v=([^&#]+)").find(s)?.groupValues?.getOrNull(1)
+            if (!vParam.isNullOrBlank()) return vParam
         }
-        val s = uri.toString()
-        if (!s.contains("://") && s.isNotBlank()) {
+        if (s.contains("youtu.be/", ignoreCase = true)) {
+            return s.substringAfter("youtu.be/").substringBefore('?').substringBefore('#').substringBefore('/').takeIf { it.isNotBlank() }
+        }
+        if (!s.contains("://")) {
             return s.removePrefix(ONLINE_PREFIX).takeIf { it.isNotBlank() }
         }
         return null
     }
 
-    fun extractVideoId(uriOrId: String?): String? {
-        if (uriOrId.isNullOrBlank()) return null
-        return try {
-            extractVideoId(Uri.parse(uriOrId))
-        } catch (_: Exception) {
-            uriOrId.removePrefix(ONLINE_PREFIX).takeIf { it.isNotBlank() }
-        }
+    fun extractVideoId(uri: Uri?): String? = extractVideoId(uri?.toString())
+
+    fun isLocalUri(uriStr: String?): Boolean {
+        if (uriStr.isNullOrBlank()) return false
+        val lower = uriStr.trim().lowercase()
+        return lower.startsWith("file:") ||
+            lower.startsWith("content:") ||
+            lower.startsWith("android.resource:")
     }
 
-    fun isLocalUri(uri: Uri?): Boolean {
-        if (uri == null) return false
-        val scheme = uri.scheme?.lowercase()
-        return scheme == "file" || scheme == "content" || scheme == "android.resource"
+    fun isLocalUri(uri: Uri?): Boolean = isLocalUri(uri?.toString())
+
+    fun isOnlineUri(uriStr: String?): Boolean {
+        if (uriStr.isNullOrBlank()) return false
+        val lower = uriStr.trim().lowercase()
+        return lower.startsWith("flowave:") ||
+            lower.contains("youtube.com") ||
+            lower.contains("youtu.be")
     }
 
-    fun isOnlineUri(uri: Uri?): Boolean {
-        if (uri == null) return false
-        val scheme = uri.scheme?.lowercase()
-        if (scheme == "flowave") return true
-        val host = uri.host?.lowercase().orEmpty()
-        return host.contains("youtube.com") || host.contains("youtu.be")
-    }
+    fun isOnlineUri(uri: Uri?): Boolean = isOnlineUri(uri?.toString())
 
     fun sourceId(track: Track): String? = track.sourceId?.takeIf { it.isNotBlank() }
         ?: extractVideoId(track.mediaUri)?.takeIf { it.isNotBlank() }
