@@ -53,6 +53,32 @@ data class ResolvedStreamSource(
 )
 
 object InnerTubeClients {
+    val IOS = InnerTubeClientConfig(
+        clientName = "IOS",
+        clientVersion = "20.10.4",
+        deviceMake = "Apple",
+        deviceModel = "iPhone16,2",
+        osName = "iPhone",
+        osVersion = "18.3.2.22D82",
+        hl = "en",
+        gl = "US",
+        userAgent = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+        clientNumber = "5"
+    )
+
+    val VISIONOS = InnerTubeClientConfig(
+        clientName = "VISIONOS",
+        clientVersion = "1.02",
+        deviceMake = "Apple",
+        deviceModel = "RealityDevice14,1",
+        osName = "visionOS",
+        osVersion = "1.3.21O771",
+        hl = "en",
+        gl = "US",
+        userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        clientNumber = "101"
+    )
+
     val ANDROID_VR = InnerTubeClientConfig(
         clientName = "ANDROID_VR",
         clientVersion = "1.56.21",
@@ -67,27 +93,13 @@ object InnerTubeClients {
         clientNumber = "28"
     )
 
-    val IOS = InnerTubeClientConfig(
-        clientName = "IOS",
-        clientVersion = "19.29.1",
-        deviceMake = "Apple",
-        deviceModel = "iPhone16,2",
-        osName = "iPhone",
-        osVersion = "17.5.1.21F90",
+    val TVHTML5_SIMPLY_EMBEDDED_PLAYER = InnerTubeClientConfig(
+        clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+        clientVersion = "2.0",
         hl = "en",
         gl = "US",
-        userAgent = "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)",
-        clientNumber = "5"
-    )
-
-    val ANDROID_TESTSUITE = InnerTubeClientConfig(
-        clientName = "ANDROID_TESTSUITE",
-        clientVersion = "1.9",
-        androidSdkVersion = 32,
-        hl = "en",
-        gl = "US",
-        userAgent = "com.google.android.youtube/1.9 (Linux; U; Android 12; US) gzip",
-        clientNumber = "30"
+        userAgent = "Mozilla/5.0 (PlayStation; PlayStation 4/11.50) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        clientNumber = "85"
     )
 
     val WEB_REMIX = InnerTubeClientConfig(
@@ -97,7 +109,7 @@ object InnerTubeClients {
         clientNumber = "67"
     )
 
-    val STREAM_FALLBACK_CHAIN = listOf(ANDROID_VR, IOS, ANDROID_TESTSUITE)
+    val STREAM_FALLBACK_CHAIN = listOf(IOS, VISIONOS, ANDROID_VR, TVHTML5_SIMPLY_EMBEDDED_PLAYER)
 
     val FALLBACK_CHAIN = STREAM_FALLBACK_CHAIN
 }
@@ -130,6 +142,89 @@ open class InnerTubeRepository(context: Context? = null) {
         streamUrlCache.remove(videoId)
         streamResolutionCache.remove(videoId)
         logger?.debug("online", "stream_cache_invalidated", context = mapOf("videoId" to videoId))
+    }
+
+    fun getCachedResolution(videoId: String): ResolvedStreamSource? {
+        return streamResolutionCache[videoId]?.second
+    }
+
+    @Volatile
+    private var cachedVisitorData: String? = null
+    private val visitorDataLock = Mutex()
+
+    suspend fun getVisitorData(forceRefresh: Boolean = false): String? = withContext(Dispatchers.IO) {
+        if (!forceRefresh && !cachedVisitorData.isNullOrBlank()) {
+            return@withContext cachedVisitorData
+        }
+
+        visitorDataLock.withLock {
+            if (!forceRefresh && !cachedVisitorData.isNullOrBlank()) {
+                return@withLock cachedVisitorData
+            }
+
+            // Method 1: Lightweight POST to https://music.youtube.com/youtubei/v1/visitor_id
+            try {
+                val visitorUrl = "https://music.youtube.com/youtubei/v1/visitor_id?prettyPrint=false"
+                val reqBody = JSONObject().apply {
+                    put("context", JSONObject().apply {
+                        put("client", JSONObject().apply {
+                            put("clientName", "WEB_REMIX")
+                            put("clientVersion", "1.20250122.01.00")
+                            put("hl", "en")
+                            put("gl", "US")
+                        })
+                    })
+                }
+                val req = Request.Builder()
+                    .url(visitorUrl)
+                    .post(reqBody.toString().toRequestBody(jsonMediaType))
+                    .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+                    .header("Content-Type", "application/json")
+                    .build()
+
+                client.newCall(req).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string().orEmpty()
+                        if (body.isNotBlank()) {
+                            val json = JSONObject(body)
+                            val vd = json.optJSONObject("responseContext")?.optString("visitorData")
+                            if (!vd.isNullOrBlank()) {
+                                cachedVisitorData = vd
+                                logger?.debug("online", "visitor_data_acquired", context = mapOf("source" to "visitor_id_endpoint"))
+                                return@withLock vd
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                logger?.warn("online", "visitor_data_fetch_failed", context = mapOf("endpoint" to "visitor_id"), throwable = e)
+            }
+
+            // Method 2: Fallback to https://www.youtube.com/sw.js_data
+            try {
+                val swUrl = "https://www.youtube.com/sw.js_data"
+                val swReq = Request.Builder()
+                    .url(swUrl)
+                    .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+                    .build()
+                client.newCall(swReq).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string().orEmpty()
+                        val match = Regex("\"visitorData\"\\s*:\\s*\"([^\"]+)\"").find(body)
+                        val vd = match?.groupValues?.getOrNull(1)
+                        if (!vd.isNullOrBlank()) {
+                            cachedVisitorData = vd
+                            logger?.debug("online", "visitor_data_acquired", context = mapOf("source" to "sw_js_data"))
+                            return@withLock vd
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                logger?.warn("online", "visitor_data_fetch_failed", context = mapOf("endpoint" to "sw_js_data"), throwable = e)
+            }
+
+            cachedVisitorData
+        }
     }
 
     open suspend fun getStreamResolution(videoId: String, forceRefresh: Boolean = false): ResolvedStreamSource {
@@ -290,6 +385,9 @@ open class InnerTubeRepository(context: Context? = null) {
                 val bodyString = response.body?.string() ?: ""
                 if (response.isSuccessful && bodyString.isNotEmpty()) {
                     val json = JSONObject(bodyString)
+                    json.optJSONObject("responseContext")?.optString("visitorData")?.takeIf { it.isNotBlank() }?.let {
+                        cachedVisitorData = it
+                    }
                     val parsed = InnerTubeParser.parseInnerTubeSearchJson(json)
                     tracks.addAll(parsed)
                     if (parsed.isNotEmpty()) {
@@ -498,13 +596,23 @@ open class InnerTubeRepository(context: Context? = null) {
         // 1. InnerTube Multi-Client Extraction Chain (Native direct extraction)
         // Never attach stub or placeholder tokens unless verified non-stub
         val poToken = try {
-            poTokenGenerator?.generateToken(videoId)?.takeIf { com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(it) }
+            withTimeoutOrNull(800L) {
+                poTokenGenerator?.generateToken(videoId)?.takeIf { com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(it) }
+            }
         } catch (e: Exception) {
             null
         }
 
+        var visitorData = getVisitorData(forceRefresh = forceRefresh)
+        var needFreshVisitorData = false
+
         for ((attempt, clientConfig) in InnerTubeClients.STREAM_FALLBACK_CHAIN.withIndex()) {
             try {
+                if (needFreshVisitorData) {
+                    visitorData = getVisitorData(forceRefresh = true)
+                    needFreshVisitorData = false
+                }
+
                 val clientJson = JSONObject().apply {
                     put("clientName", clientConfig.clientName)
                     put("clientVersion", clientConfig.clientVersion)
@@ -515,6 +623,9 @@ open class InnerTubeRepository(context: Context? = null) {
                     clientConfig.androidSdkVersion?.let { put("androidSdkVersion", it) }
                     put("hl", clientConfig.hl)
                     put("gl", clientConfig.gl)
+                    if (!visitorData.isNullOrBlank()) {
+                        put("visitorData", visitorData)
+                    }
                 }
 
                 val charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
@@ -528,6 +639,13 @@ open class InnerTubeRepository(context: Context? = null) {
                     put("videoId", videoId)
                     put("contentCheckOk", true)
                     put("racyCheckOk", true)
+
+                    // TVHTML5_SIMPLY_EMBEDDED_PLAYER requires thirdParty embedUrl
+                    if (clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                        put("thirdParty", JSONObject().apply {
+                            put("embedUrl", "https://www.youtube.com/")
+                        })
+                    }
 
                     // Attach serviceIntegrityDimensions ONLY if a verified non-stub token is present
                     if (com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(poToken)) {
@@ -547,8 +665,12 @@ open class InnerTubeRepository(context: Context? = null) {
 
                 clientConfig.clientNumber?.let { reqBuilder.header("X-YouTube-Client-Name", it) }
                 reqBuilder.header("X-YouTube-Client-Version", clientConfig.clientVersion)
-                if (clientConfig.clientName == "ANDROID_VR") {
+                if (!visitorData.isNullOrBlank()) {
+                    reqBuilder.header("X-Goog-Visitor-Id", visitorData)
+                }
+                if (clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
                     reqBuilder.header("Origin", "https://www.youtube.com")
+                    reqBuilder.header("Referer", "https://www.youtube.com/")
                 }
 
                 val request = reqBuilder.build()
@@ -557,6 +679,11 @@ open class InnerTubeRepository(context: Context? = null) {
                     val bodyString = response.body?.string() ?: ""
                     if (response.isSuccessful && bodyString.isNotEmpty()) {
                         val json = JSONObject(bodyString)
+
+                        // Update visitorData if responseContext contains it
+                        json.optJSONObject("responseContext")?.optString("visitorData")?.takeIf { it.isNotBlank() }?.let {
+                            cachedVisitorData = it
+                        }
 
                         val playabilityStatus = json.optJSONObject("playabilityStatus")
                         val status = playabilityStatus?.optString("status")
@@ -567,6 +694,10 @@ open class InnerTubeRepository(context: Context? = null) {
                                 "status" to status,
                                 "reason" to (playabilityStatus.optString("reason").take(200))
                             ))
+                            if (status == "LOGIN_REQUIRED") {
+                                needFreshVisitorData = true
+                                cachedVisitorData = null
+                            }
                         } else {
                             val extractedUrl = InnerTubeParser.parsePlayerResponse(json, client)
                             if (!extractedUrl.isNullOrBlank()) {
@@ -580,7 +711,10 @@ open class InnerTubeRepository(context: Context? = null) {
                                 )
                                 clientConfig.clientNumber?.let { requestHeaders["X-YouTube-Client-Name"] = it }
                                 requestHeaders["X-YouTube-Client-Version"] = clientConfig.clientVersion
-                                if (clientConfig.clientName == "ANDROID_VR") {
+                                if (!visitorData.isNullOrBlank()) {
+                                    requestHeaders["X-Goog-Visitor-Id"] = visitorData
+                                }
+                                if (clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
                                     requestHeaders["Origin"] = "https://www.youtube.com"
                                     requestHeaders["Referer"] = "https://www.youtube.com/"
                                 }
@@ -630,7 +764,7 @@ open class InnerTubeRepository(context: Context? = null) {
         }
 
         // 2. Embedded yt-dlp resolver (Safe, on-device, handles BotGuard & signature challenges)
-        if (YtDlpBinaryValidator.isRuntimeAvailable(appContext) && FloWaveRuntime.awaitReady(2_000L)) {
+        if (FloWaveRuntime.ready || FloWaveRuntime.awaitReady(2_000L)) {
             val result = localStreamResolver.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId", allowFallbackToNative = false)
             result.onSuccess { resolved ->
                 logger?.info("online", "embedded_resolver_succeeded", context = mapOf("videoId" to videoId))

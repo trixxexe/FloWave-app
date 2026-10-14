@@ -312,10 +312,10 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
         try {
             val request = YoutubeDLRequest(url).apply {
                 addOption("--no-playlist")
-                addOption("--extractor-args", "youtube:player_client=ios,android")
+                addOption("--extractor-args", "youtube:player_client=ios,visionos,android_vr,mweb")
                 addOption("--no-warnings")
                 addOption("--get-url")
-                addOption("-f", "bestaudio[protocol^=http]/bestaudio/best")
+                addOption("-f", "bestaudio[ext=m4a]/bestaudio/best")
             }
             val output = withTimeout(90_000L) {
                 runInterruptible(Dispatchers.IO) {

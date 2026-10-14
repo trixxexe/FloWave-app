@@ -166,18 +166,15 @@ class PoTokenGenerator(private val context: Context) {
     }
 
     suspend fun generateToken(videoId: String): String? = withContext(Dispatchers.IO) {
-        if (!isInitialized.get()) initialize()
-        
-        var retries = 0
-        while (!isInitialized.get() && retries < 25) {
-            kotlinx.coroutines.delay(200)
-            retries++
+        if (!isInitialized.get()) {
+            initialize()
+            // Immediately return null if BotGuard is not initialized yet to avoid blocking stream resolution
+            return@withContext null
         }
-        if (!isInitialized.get()) return@withContext null
 
         tokenMutex.withLock {
             try {
-                val token = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                val token = kotlinx.coroutines.withTimeoutOrNull(800L) {
                     suspendCancellableCoroutine<String?> { cont ->
                         activeContinuations[videoId] = cont
                         cont.invokeOnCancellation { activeContinuations.remove(videoId) }

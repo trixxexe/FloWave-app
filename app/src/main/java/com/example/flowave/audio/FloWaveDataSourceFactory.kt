@@ -69,6 +69,11 @@ class FloWaveDataSourceFactory(
     // Tracks in-flight resolution jobs/futures per DataSource instance for clean close() cancellation
     private val activeResolutionJobs = ConcurrentHashMap<DataSource, Job>()
     private val activeResolutionFutures = ConcurrentHashMap<DataSource, CompletableFuture<ResolvedStreamSource>>()
+    private val failedAttempts = ConcurrentHashMap<String, Int>()
+
+    fun resetAttempts(videoId: String) {
+        failedAttempts.remove(videoId)
+    }
 
     @Throws(IOException::class)
     fun resolveStreamDataSpec(dataSpec: DataSpec, sourceInstance: DataSource? = null): DataSpec {
@@ -90,16 +95,24 @@ class FloWaveDataSourceFactory(
             throw IOException("Missing online track identifier")
         }
 
+        val attempts = failedAttempts.getOrDefault(videoId, 0)
+        if (attempts >= 2) {
+            throw IOException("Online stream resolution previously failed for $videoId after retry")
+        }
+        val isRetry = attempts > 0
+
         val future = CompletableFuture<ResolvedStreamSource>()
         val job = resolutionScope.launch {
             try {
                 val resolved = withTimeout(45_000L) {
-                    streamRepository.getStreamResolution(videoId)
+                    streamRepository.getStreamResolution(videoId, forceRefresh = isRetry)
                 }
+                failedAttempts.remove(videoId)
                 future.complete(resolved)
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 future.completeExceptionally(cancelled)
             } catch (error: Throwable) {
+                failedAttempts[videoId] = attempts + 1
                 future.completeExceptionally(error)
             }
         }
@@ -159,6 +172,7 @@ class FloWaveDataSourceFactory(
             "Referer" to "https://www.youtube.com/"
         )
         val ua = resolution.userAgent ?: ANDROID_VR_USER_AGENT
+        defaultHttpDataSourceFactory.setUserAgent(ua)
         headers["User-Agent"] = ua
         headers.putAll(resolution.requestHeaders)
 

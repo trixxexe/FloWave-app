@@ -282,8 +282,10 @@ class FloWaveAudioEngine(private val context: Context) {
             .build()
 
         val customDataSourceFactory = FloWaveDataSourceFactory(context)
+        val loadErrorHandlingPolicy = androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(1)
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
             .setDataSourceFactory(customDataSourceFactory)
+            .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
 
         // Keep Media3's default AudioSink/Sonic lifecycle. A custom processor
         // could retain stale buffers across seek/prepare and crash inside
@@ -705,10 +707,18 @@ class FloWaveAudioEngine(private val context: Context) {
 
         // For online tracks using the custom flowave:// scheme, Media3 cannot
         // infer the content type from the URI alone. Setting a MIME type hint
-        // tells DefaultMediaSourceFactory to use a ProgressiveMediaSource with
-        // the correct extractor instead of failing on scheme detection.
+        // For online tracks, check if resolved stream is HLS manifest (.m3u8), DASH (.mpd), or progressive MP4/WebM
         if (track.isOnline) {
-            builder.setMimeType(androidx.media3.common.MimeTypes.AUDIO_MP4)
+            val sourceId = PlaybackIdentity.sourceId(track)
+            val cached = sourceId?.let { innerTubeRepo.getCachedResolution(it) }
+            val url = cached?.url ?: ""
+            if (url.contains(".m3u8") || url.contains("/hls_") || url.contains("manifest/hls")) {
+                builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+            } else if (url.contains(".mpd") || url.contains("manifest/dash")) {
+                builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
+            } else {
+                builder.setMimeType(androidx.media3.common.MimeTypes.AUDIO_MP4)
+            }
         }
 
         return builder.build()
@@ -781,9 +791,12 @@ class FloWaveAudioEngine(private val context: Context) {
         player.playWhenReady = resume
     }
 
-    /** Starts an online result; the stream is resolved lazily by Media3. */
+    /** Starts an online result; the stream is resolved lazily by Media3 or pre-warmed on Dispatchers.IO. */
     suspend fun playOnlineTrack(track: com.example.flowave.data.model.InnerTubeTrack) {
         logger.info("online", "play_requested", context = mapOf("videoId" to track.id))
+        withContext(Dispatchers.IO) {
+            runCatching { innerTubeRepo.getStreamResolution(track.id) }
+        }
         playTrack(innerTubeRepo.createOnlineTrack(track))
     }
 

@@ -20,14 +20,33 @@ class InnerTubeSearchAndPlayerTest {
     fun `inner tube client fallback chain uses valid clients and complete device contexts`() {
         val chain = InnerTubeClients.FALLBACK_CHAIN
         assertTrue(chain.isNotEmpty())
-        assertEquals(3, chain.size)
+        assertEquals(4, chain.size)
         
         // Ensure no invalid or deprecated clients exist in the fallback chain
         for (client in chain) {
             assertFalse("ANDROID_EMBEDDED_PLAYER is an invalid enum and must not be used", client.clientName == "ANDROID_EMBEDDED_PLAYER")
+            assertFalse("ANDROID_TESTSUITE must not be used", client.clientName == "ANDROID_TESTSUITE")
             assertTrue("Client version must not be empty", client.clientVersion.isNotBlank())
             assertTrue("User agent must not be empty", client.userAgent.isNotBlank())
         }
+
+        // Verify iOS client context completeness
+        val ios = chain.first { it.clientName == "IOS" }
+        assertEquals("Apple", ios.deviceMake)
+        assertEquals("iPhone16,2", ios.deviceModel)
+        assertEquals("iPhone", ios.osName)
+        assertEquals("18.3.2.22D82", ios.osVersion)
+        assertEquals("20.10.4", ios.clientVersion)
+        assertEquals("5", ios.clientNumber)
+
+        // Verify VisionOS client context completeness
+        val visionos = chain.first { it.clientName == "VISIONOS" }
+        assertEquals("Apple", visionos.deviceMake)
+        assertEquals("RealityDevice14,1", visionos.deviceModel)
+        assertEquals("visionOS", visionos.osName)
+        assertEquals("1.3.21O771", visionos.osVersion)
+        assertEquals("1.02", visionos.clientVersion)
+        assertEquals("101", visionos.clientNumber)
 
         // Verify Android VR client context completeness
         val vr = chain.first { it.clientName == "ANDROID_VR" }
@@ -39,20 +58,10 @@ class InnerTubeSearchAndPlayerTest {
         assertEquals("1.56.21", vr.clientVersion)
         assertEquals("28", vr.clientNumber)
 
-        // Verify iOS client context completeness
-        val ios = chain.first { it.clientName == "IOS" }
-        assertEquals("Apple", ios.deviceMake)
-        assertEquals("iPhone16,2", ios.deviceModel)
-        assertEquals("iPhone", ios.osName)
-        assertEquals("17.5.1.21F90", ios.osVersion)
-        assertEquals("19.29.1", ios.clientVersion)
-        assertEquals("5", ios.clientNumber)
-
-        // Verify Android TestSuite client context completeness
-        val testsuite = chain.first { it.clientName == "ANDROID_TESTSUITE" }
-        assertEquals(32, testsuite.androidSdkVersion)
-        assertEquals("1.9", testsuite.clientVersion)
-        assertEquals("30", testsuite.clientNumber)
+        // Verify TVHTML5 client context completeness
+        val tv = chain.first { it.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER" }
+        assertEquals("2.0", tv.clientVersion)
+        assertEquals("85", tv.clientNumber)
     }
 
     @Test

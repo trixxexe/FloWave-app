@@ -298,4 +298,47 @@ class FloWaveDataSourceTest {
         assertEquals(Uri.parse("https://media.example.test/stream/$videoId.webm"), resolvedSpec.uri)
         assertEquals(1, mockRepo.resolutionCount.get())
     }
+
+    @Test
+    fun `resolveStreamDataSpec retries once with forceRefresh true then fails fast on subsequent attempts`() {
+        class FailingStreamRepository : InnerTubeRepository() {
+            val forceRefreshCalls = mutableListOf<Boolean>()
+            override suspend fun getStreamResolution(videoId: String, forceRefresh: Boolean): ResolvedStreamSource {
+                forceRefreshCalls.add(forceRefresh)
+                throw IOException("All clients failed")
+            }
+        }
+
+        val failingRepo = FailingStreamRepository()
+        val factory = FloWaveDataSourceFactory(context, failingRepo)
+        val dataSpec = DataSpec(Uri.parse("flowave://youtube/vid_fail_fast"))
+
+        // Attempt 1: forceRefresh = false
+        try {
+            factory.resolveStreamDataSpec(dataSpec)
+            fail("Expected IOException")
+        } catch (e: IOException) {
+            assertTrue(e.message?.contains("All clients failed") == true)
+        }
+
+        // Attempt 2 (Retry 1): forceRefresh = true
+        try {
+            factory.resolveStreamDataSpec(dataSpec)
+            fail("Expected IOException")
+        } catch (e: IOException) {
+            assertTrue(e.message?.contains("All clients failed") == true)
+        }
+
+        // Attempt 3 (Redundant loop attempt): Fails fast without hitting streamRepository
+        try {
+            factory.resolveStreamDataSpec(dataSpec)
+            fail("Expected IOException")
+        } catch (e: IOException) {
+            assertTrue(e.message?.contains("previously failed") == true)
+        }
+
+        assertEquals(2, failingRepo.forceRefreshCalls.size)
+        assertEquals(false, failingRepo.forceRefreshCalls[0])
+        assertEquals(true, failingRepo.forceRefreshCalls[1])
+    }
 }

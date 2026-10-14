@@ -13,11 +13,12 @@ class InnerTubeRequestAndFallbackTest {
     @Test
     fun testInnerTubeClientsFallbackChainOrdering() {
         val chain = InnerTubeClients.FALLBACK_CHAIN
-        assertEquals(3, chain.size)
-        // ANDROID_VR is primary, followed by IOS, then ANDROID_TESTSUITE
-        assertEquals("ANDROID_VR", chain[0].clientName)
-        assertEquals("IOS", chain[1].clientName)
-        assertEquals("ANDROID_TESTSUITE", chain[2].clientName)
+        assertEquals(4, chain.size)
+        // Prioritized chain: IOS -> VISIONOS -> ANDROID_VR -> TVHTML5_SIMPLY_EMBEDDED_PLAYER
+        assertEquals("IOS", chain[0].clientName)
+        assertEquals("VISIONOS", chain[1].clientName)
+        assertEquals("ANDROID_VR", chain[2].clientName)
+        assertEquals("TVHTML5_SIMPLY_EMBEDDED_PLAYER", chain[3].clientName)
     }
 
     @Test
@@ -37,14 +38,17 @@ class InnerTubeRequestAndFallbackTest {
 
     @Test
     fun testClientAwareUserAgents() {
-        val vr = InnerTubeClients.ANDROID_VR
-        assertTrue(vr.userAgent.contains("youtube.vr.oculus"))
-
         val ios = InnerTubeClients.IOS
         assertTrue(ios.userAgent.contains("com.google.ios.youtube") || ios.userAgent.contains("iPhone"))
 
-        val testsuite = InnerTubeClients.ANDROID_TESTSUITE
-        assertTrue(testsuite.userAgent.contains("com.google.android.youtube"))
+        val visionos = InnerTubeClients.VISIONOS
+        assertTrue(visionos.userAgent.contains("Mozilla") || visionos.userAgent.contains("Safari"))
+
+        val vr = InnerTubeClients.ANDROID_VR
+        assertTrue(vr.userAgent.contains("youtube.vr.oculus"))
+
+        val tv = InnerTubeClients.TVHTML5_SIMPLY_EMBEDDED_PLAYER
+        assertTrue(tv.userAgent.contains("PlayStation") || tv.userAgent.contains("Mozilla"))
 
         val web = InnerTubeClients.WEB_REMIX
         assertTrue(web.userAgent.contains("Mozilla") || web.userAgent.contains("Windows"))
