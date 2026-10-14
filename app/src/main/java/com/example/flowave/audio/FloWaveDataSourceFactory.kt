@@ -181,132 +181,122 @@ class FloWaveDataSourceFactory(
     )
 
     override fun createDataSource(): DataSource {
-        val cacheDataSource = cacheDataSourceFactory.createDataSource()
-        val defaultDataSource = defaultDataSourceFactory.createDataSource()
+        return FloWaveTrackDataSource(
+            cacheDataSource = cacheDataSourceFactory.createDataSource(),
+            defaultDataSource = defaultDataSourceFactory.createDataSource()
+        )
+    }
 
-        return object : DataSource {
-            private var activeDataSource: DataSource? = null
-            private var resolvingDataSource: ResolvingDataSource? = null
+    private inner class FloWaveTrackDataSource(
+        private val cacheDataSource: DataSource,
+        private val defaultDataSource: DataSource
+    ) : DataSource {
+        private var activeDataSource: DataSource? = null
+        private val resolvingDataSource: ResolvingDataSource = ResolvingDataSource(
+            cacheDataSource,
+            object : ResolvingDataSource.Resolver {
+                override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
+                    return resolveStreamDataSpec(dataSpec, this@FloWaveTrackDataSource)
+                }
+            }
+        )
 
-            init {
-                resolvingDataSource = ResolvingDataSource(
-                    cacheDataSource,
-                    object : ResolvingDataSource.Resolver {
-                        override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
-                            return resolveStreamDataSpec(dataSpec, this@object)
-                        }
-                    }
-                )
+        override fun addTransferListener(transferListener: TransferListener) {
+            cacheDataSource.addTransferListener(transferListener)
+            defaultDataSource.addTransferListener(transferListener)
+            resolvingDataSource.addTransferListener(transferListener)
+        }
+
+        override fun open(dataSpec: DataSpec): Long {
+            val isLocal = PlaybackIdentity.isLocalUri(dataSpec.uri)
+            if (isLocal) {
+                activeDataSource = defaultDataSource
+                return defaultDataSource.open(dataSpec)
             }
 
-            override fun addTransferListener(transferListener: TransferListener) {
-                cacheDataSource.addTransferListener(transferListener)
-                defaultDataSource.addTransferListener(transferListener)
-                resolvingDataSource?.addTransferListener(transferListener)
-            }
+            activeDataSource = resolvingDataSource
+            val videoId = dataSpec.key ?: PlaybackIdentity.extractVideoId(dataSpec.uri)
+            val openStartedAt = System.nanoTime()
 
-            override fun open(dataSpec: DataSpec): Long {
-                val isLocal = PlaybackIdentity.isLocalUri(dataSpec.uri)
-                if (isLocal) {
-                    activeDataSource = defaultDataSource
-                    return defaultDataSource.open(dataSpec)
+            val openedLength = try {
+                resolvingDataSource.open(dataSpec)
+            } catch (error: Exception) {
+                val cancelled = error is InterruptedException ||
+                        error is kotlinx.coroutines.CancellationException ||
+                        error.message?.contains("cancelled", ignoreCase = true) == true
+                val httpStatus = (error as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                val failureClass = httpStatus?.let { OnlinePlaybackPolicy.classifyHttpStatus(it) }
+                    ?: "media_open_failure"
+
+                if (!cancelled && videoId != null) {
+                    streamRepository.markUnplayableStream(videoId, failureClass)
+                    streamRepository.invalidateStreamUrl(videoId)
+                    FloWaveCacheManager.invalidate(videoId)
                 }
 
-                val currentResolving = resolvingDataSource ?: run {
-                    ResolvingDataSource(
-                        cacheDataSource,
-                        object : ResolvingDataSource.Resolver {
-                            override fun resolveDataSpec(spec: DataSpec): DataSpec {
-                                return resolveStreamDataSpec(spec, this@object)
-                            }
-                        }
-                    ).also { resolvingDataSource = it }
-                }
-
-                activeDataSource = currentResolving
-                val videoId = dataSpec.key ?: PlaybackIdentity.extractVideoId(dataSpec.uri)
-                val openStartedAt = System.nanoTime()
-
-                val openedLength = try {
-                    currentResolving.open(dataSpec)
-                } catch (error: Exception) {
-                    val cancelled = error is InterruptedException ||
-                            error is kotlinx.coroutines.CancellationException ||
-                            error.message?.contains("cancelled", ignoreCase = true) == true
-                    val httpStatus = (error as? HttpDataSource.InvalidResponseCodeException)?.responseCode
-                    val failureClass = httpStatus?.let { OnlinePlaybackPolicy.classifyHttpStatus(it) }
-                        ?: "media_open_failure"
-
-                    if (!cancelled && videoId != null) {
-                        streamRepository.markUnplayableStream(videoId, failureClass)
-                        streamRepository.invalidateStreamUrl(videoId)
-                        FloWaveCacheManager.invalidate(videoId)
-                    }
-
-                    if (cancelled) {
-                        logger.debug("online", "stream_open_cancelled", context = mapOf(
-                            "videoId" to videoId,
-                            "reason" to error::class.simpleName.orEmpty(),
-                            "httpStatus" to httpStatus,
-                            "failureClass" to failureClass
-                        ))
-                    } else {
-                        logger.error("online", "stream_open_failed", context = mapOf(
-                            "videoId" to videoId,
-                            "httpStatus" to httpStatus,
-                            "failureClass" to failureClass,
-                            "errorType" to error::class.simpleName.orEmpty()
-                        ), throwable = error)
-                    }
-                    throw error
-                }
-
-                val headers = currentResolving.responseHeaders
-                val contentType = headers.entries
-                    .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
-                    ?.value?.firstOrNull()
-
-                if (!OnlinePlaybackPolicy.isPlayableResponseContentType(contentType)) {
-                    currentResolving.close()
-                    activeDataSource = null
-                    if (videoId != null) {
-                        streamRepository.markUnplayableStream(videoId, "media_open_failure")
-                        streamRepository.invalidateStreamUrl(videoId)
-                        FloWaveCacheManager.invalidate(videoId)
-                    }
-                    logger.error("online", "stream_open_rejected", context = mapOf(
+                if (cancelled) {
+                    logger.debug("online", "stream_open_cancelled", context = mapOf(
                         "videoId" to videoId,
-                        "reason" to "non_media_content_type",
-                        "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase()
+                        "reason" to error::class.simpleName.orEmpty(),
+                        "httpStatus" to httpStatus,
+                        "failureClass" to failureClass
                     ))
-                    throw IOException("Resolved stream returned non-media content")
+                } else {
+                    logger.error("online", "stream_open_failed", context = mapOf(
+                        "videoId" to videoId,
+                        "httpStatus" to httpStatus,
+                        "failureClass" to failureClass,
+                        "errorType" to error::class.simpleName.orEmpty()
+                    ), throwable = error)
                 }
-
-                logger.info("online", "stream_opened_waiting_for_media3_ready", context = mapOf(
-                    "videoId" to videoId,
-                    "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
-                    "openedLength" to openedLength,
-                    "openDurationMs" to ((System.nanoTime() - openStartedAt) / 1_000_000L)
-                ))
-
-                return openedLength
+                throw error
             }
 
-            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-                return activeDataSource?.read(buffer, offset, length) ?: C.RESULT_END_OF_INPUT
-            }
+            val headers = resolvingDataSource.responseHeaders
+            val contentType = headers.entries
+                .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+                ?.value?.firstOrNull()
 
-            override fun getUri(): Uri? = activeDataSource?.uri
-
-            override fun getResponseHeaders(): Map<String, List<String>> =
-                activeDataSource?.responseHeaders ?: emptyMap()
-
-            override fun close() {
-                activeResolutionJobs.remove(this)?.cancel()
-                activeResolutionFutures.remove(this)?.cancel(true)
-                activeDataSource?.close()
+            if (!OnlinePlaybackPolicy.isPlayableResponseContentType(contentType)) {
+                resolvingDataSource.close()
                 activeDataSource = null
+                if (videoId != null) {
+                    streamRepository.markUnplayableStream(videoId, "media_open_failure")
+                    streamRepository.invalidateStreamUrl(videoId)
+                    FloWaveCacheManager.invalidate(videoId)
+                }
+                logger.error("online", "stream_open_rejected", context = mapOf(
+                    "videoId" to videoId,
+                    "reason" to "non_media_content_type",
+                    "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase()
+                ))
+                throw IOException("Resolved stream returned non-media content")
             }
+
+            logger.info("online", "stream_opened_waiting_for_media3_ready", context = mapOf(
+                "videoId" to videoId,
+                "contentType" to contentType.orEmpty().substringBefore(';').trim().lowercase(),
+                "openedLength" to openedLength,
+                "openDurationMs" to ((System.nanoTime() - openStartedAt) / 1_000_000L)
+            ))
+
+            return openedLength
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            return activeDataSource?.read(buffer, offset, length) ?: C.RESULT_END_OF_INPUT
+        }
+
+        override fun getUri(): Uri? = activeDataSource?.uri
+
+        override fun getResponseHeaders(): Map<String, List<String>> =
+            activeDataSource?.responseHeaders ?: emptyMap()
+
+        override fun close() {
+            activeResolutionJobs.remove(this)?.cancel()
+            activeResolutionFutures.remove(this)?.cancel(true)
+            activeDataSource?.close()
+            activeDataSource = null
         }
     }
 }
