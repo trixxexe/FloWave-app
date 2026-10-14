@@ -62,7 +62,12 @@ class FloWaveNativeDownloader(
         val startedAt = System.nanoTime()
         send(DownloadState.Initializing)
 
-        val videoId = PlaybackIdentity.extractVideoId(urlOrVideoId) ?: urlOrVideoId.trim()
+        val extractedId = PlaybackIdentity.extractVideoId(urlOrVideoId)
+        val isHttp = DownloadInput.isHttpUrl(urlOrVideoId)
+        val isDirectStreamUrl = (isHttp && extractedId == null) ||
+            (isHttp && (urlOrVideoId.contains("googlevideo.com") || urlOrVideoId.contains("/videoplayback")))
+
+        val videoId = extractedId ?: if (isHttp) "stream_${Integer.toHexString(urlOrVideoId.hashCode())}" else urlOrVideoId.trim()
         if (videoId.isBlank()) {
             send(DownloadState.Error("Invalid video ID or URL: $urlOrVideoId"))
             return@channelFlow
@@ -74,14 +79,31 @@ class FloWaveNativeDownloader(
         }
 
         send(DownloadState.Preparing)
-        logger.info("native_downloader", "resolving_stream", context = mapOf("videoId" to videoId))
+        logger.info("native_downloader", "resolving_stream", context = mapOf(
+            "videoId" to videoId,
+            "isDirectStream" to isDirectStreamUrl
+        ))
 
-        var currentResolution = try {
-            innerTubeRepo.getStreamResolution(videoId)
-        } catch (e: Exception) {
-            logger.error("native_downloader", "stream_resolution_failed", context = mapOf("videoId" to videoId), throwable = e)
-            send(DownloadState.Error("Failed to resolve audio stream: ${e.message}"))
-            return@channelFlow
+        var currentResolution = if (isDirectStreamUrl) {
+            com.example.flowave.data.remote.ResolvedStreamSource(
+                url = urlOrVideoId,
+                resolver = "direct",
+                candidateKey = null,
+                userAgent = DEFAULT_USER_AGENT,
+                requestHeaders = mapOf(
+                    "User-Agent" to DEFAULT_USER_AGENT,
+                    "Origin" to "https://www.youtube.com",
+                    "Referer" to "https://www.youtube.com/"
+                )
+            )
+        } else {
+            try {
+                innerTubeRepo.getStreamResolution(videoId)
+            } catch (e: Exception) {
+                logger.error("native_downloader", "stream_resolution_failed", context = mapOf("videoId" to videoId), throwable = e)
+                send(DownloadState.Error("Failed to resolve audio stream: ${e.message}"))
+                return@channelFlow
+            }
         }
 
         var streamUrl = currentResolution.url
@@ -90,19 +112,19 @@ class FloWaveNativeDownloader(
         var streamRefreshed = false
 
         suspend fun refreshStreamUrlOnce(): Boolean {
-            if (streamRefreshed) return false
+            if (streamRefreshed || extractedId.isNullOrBlank()) return false
             streamRefreshed = true
             return try {
-                logger.info("native_downloader", "refreshing_expired_stream", context = mapOf("videoId" to videoId))
-                innerTubeRepo.invalidateStreamUrl(videoId)
-                val refreshed = innerTubeRepo.getStreamResolution(videoId, forceRefresh = true)
+                logger.info("native_downloader", "refreshing_expired_stream", context = mapOf("videoId" to extractedId))
+                innerTubeRepo.invalidateStreamUrl(extractedId)
+                val refreshed = innerTubeRepo.getStreamResolution(extractedId, forceRefresh = true)
                 currentResolution = refreshed
                 streamUrl = refreshed.url
                 userAgent = refreshed.userAgent?.ifBlank { DEFAULT_USER_AGENT } ?: DEFAULT_USER_AGENT
                 requestHeaders = refreshed.requestHeaders
                 true
             } catch (e: Exception) {
-                logger.warn("native_downloader", "stream_refresh_failed", context = mapOf("videoId" to videoId), throwable = e)
+                logger.warn("native_downloader", "stream_refresh_failed", context = mapOf("videoId" to extractedId), throwable = e)
                 false
             }
         }
@@ -116,7 +138,9 @@ class FloWaveNativeDownloader(
         }
 
         // Fetch metadata to form a clean filename
-        val metadata = runCatching { innerTubeRepo.getTrackMetadata(videoId) }.getOrNull()
+        val metadata = if (!extractedId.isNullOrBlank()) {
+            runCatching { innerTubeRepo.getTrackMetadata(extractedId) }.getOrNull()
+        } else null
         val title = metadata?.title ?: "Audio_$videoId"
         val extension = determineExtension(streamUrl, options, mimeType)
         val safeBaseName = DownloadInput.safeFileName("$title [$videoId]")

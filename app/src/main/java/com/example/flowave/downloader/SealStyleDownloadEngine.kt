@@ -38,7 +38,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
         return YtDlpBinaryValidator.isRuntimeAvailable(ctx)
     }
 
-    suspend fun inspect(input: String): Result<List<DownloadMediaInfo>> = withContext(Dispatchers.IO) {
+    suspend fun inspect(input: String, allowFallbackToNative: Boolean = true): Result<List<DownloadMediaInfo>> = withContext(Dispatchers.IO) {
         val operation = if (DownloadInput.isHttpUrl(input)) "url_metadata" else "keyword_search"
         val startedAt = System.nanoTime()
         val ctx = appContext ?: com.example.flowave.FloWaveApplication.appContext
@@ -50,7 +50,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
         // If embedded runtime is a stub or unavailable, fall back to pure-Kotlin native search
         if (!isAvailable() || !FloWaveRuntime.awaitReady(2_000L)) {
             logger?.info("downloader", "inspect_stub_or_unavailable_fallback_native", context = mapOf("input" to input))
-            if (ctx != null) {
+            if (allowFallbackToNative && ctx != null) {
                 return@withContext fallbackNativeInspect(ctx, input)
             }
             val error = IllegalStateException("The embedded yt-dlp runtime is unavailable")
@@ -87,7 +87,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 "failureClass" to "timeout",
                 "durationMs" to elapsedMs(startedAt)
             ), throwable = error)
-            if (ctx != null) {
+            if (allowFallbackToNative && ctx != null) {
                 return@withContext fallbackNativeInspect(ctx, input)
             }
             Result.failure(IllegalStateException("yt-dlp inspection timed out", error))
@@ -100,7 +100,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
                 "failureClass" to error::class.simpleName.orEmpty(),
                 "durationMs" to elapsedMs(startedAt)
             ), throwable = error)
-            if (ctx != null) {
+            if (allowFallbackToNative && ctx != null) {
                 return@withContext fallbackNativeInspect(ctx, input)
             }
             Result.failure(error)
@@ -295,13 +295,13 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
     }
 
     /** Resolves a playable audio URL through yt-dlp, cleanly falling back to native InnerTube on failure. */
-    suspend fun resolveAudioUrl(url: String): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun resolveAudioUrl(url: String, allowFallbackToNative: Boolean = true): Result<String> = withContext(Dispatchers.IO) {
         val ctx = appContext ?: com.example.flowave.FloWaveApplication.appContext
         val videoId = PlaybackIdentity.extractVideoId(url)
 
         if (!isAvailable() || !FloWaveRuntime.awaitReady(2_000L)) {
             logger?.debug("downloader", "playback_runtime_unavailable_fallback_native")
-            if (videoId != null && ctx != null) {
+            if (allowFallbackToNative && videoId != null && ctx != null) {
                 return@withContext runCatching {
                     InnerTubeRepository.getInstance(ctx).getStreamResolution(videoId).url
                 }
@@ -333,7 +333,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
             Result.success(resolved)
         } catch (error: TimeoutCancellationException) {
             logger?.warn("downloader", "playback_resolver_timeout_fallback_native", throwable = error)
-            if (videoId != null && ctx != null) {
+            if (allowFallbackToNative && videoId != null && ctx != null) {
                 return@withContext runCatching {
                     InnerTubeRepository.getInstance(ctx).getStreamResolution(videoId).url
                 }
@@ -345,7 +345,7 @@ class SealStyleDownloadEngine(private val appContext: Context? = null) {
             logger?.warn("downloader", "playback_resolver_failed_fallback_native", context = mapOf(
                 "failureClass" to error::class.simpleName.orEmpty()
             ), throwable = error)
-            if (videoId != null && ctx != null) {
+            if (allowFallbackToNative && videoId != null && ctx != null) {
                 return@withContext runCatching {
                     InnerTubeRepository.getInstance(ctx).getStreamResolution(videoId).url
                 }

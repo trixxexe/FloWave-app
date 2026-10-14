@@ -49,4 +49,13 @@ class InnerTubeRequestAndFallbackTest {
         val web = InnerTubeClients.WEB_REMIX
         assertTrue(web.userAgent.contains("Mozilla") || web.userAgent.contains("Windows"))
     }
+
+    @Test
+    fun testFallbackRecursionPrevention() = kotlinx.coroutines.runBlocking {
+        val engine = com.example.flowave.downloader.SealStyleDownloadEngine(null)
+        val inspectResult = engine.inspect("test", allowFallbackToNative = false)
+        assertTrue("Inspect with allowFallbackToNative=false should fail cleanly without recursion", inspectResult.isFailure)
+        val resolveResult = engine.resolveAudioUrl("https://www.youtube.com/watch?v=12345", allowFallbackToNative = false)
+        assertTrue("Resolve with allowFallbackToNative=false should fail cleanly without recursion", resolveResult.isFailure)
+    }
 }

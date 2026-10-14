@@ -23,9 +23,15 @@ object PlaybackIdentity {
         if (s.contains("youtube.com", ignoreCase = true)) {
             val vParam = Regex("[?&]v=([^&#]+)").find(s)?.groupValues?.getOrNull(1)
             if (!vParam.isNullOrBlank()) return vParam
+            val shortId = Regex("(?:shorts|embed)/([^?&#/]+)").find(s)?.groupValues?.getOrNull(1)
+            if (!shortId.isNullOrBlank()) return shortId
         }
         if (s.contains("youtu.be/", ignoreCase = true)) {
             return s.substringAfter("youtu.be/").substringBefore('?').substringBefore('#').substringBefore('/').takeIf { it.isNotBlank() }
+        }
+        if (s.contains("googlevideo.com", ignoreCase = true)) {
+            val idParam = Regex("[?&]id=([^&#]+)").find(s)?.groupValues?.getOrNull(1)
+            if (!idParam.isNullOrBlank()) return idParam
         }
         if (!s.contains("://")) {
             return s.removePrefix(ONLINE_PREFIX).takeIf { it.isNotBlank() }
@@ -55,6 +61,7 @@ object PlaybackIdentity {
         return lower.startsWith("flowave:") ||
             lower.contains("youtube.com") ||
             lower.contains("youtu.be") ||
+            lower.contains("googlevideo.com") ||
             lower.startsWith(ONLINE_PREFIX)
     }
 

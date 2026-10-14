@@ -297,6 +297,10 @@ class FloWaveRepository(private val context: Context) {
 
     /** Imports an audio document without copying it; the persisted SAF URI is the playback source. */
     suspend fun importAudioUri(uri: android.net.Uri, importedFolder: String? = null): Track? = withContext(Dispatchers.IO) {
+        if (com.example.flowave.audio.PlaybackIdentity.isOnlineUri(uri) || !com.example.flowave.audio.PlaybackIdentity.isLocalUri(uri)) {
+            logger.warn("import", "rejected_online_or_non_local_uri", context = mapOf("uri" to uri.toString()))
+            return@withContext null
+        }
         try {
             logger.info("import", "file_import_started", context = mapOf("source" to "saf_file"))
             persistReadPermission(uri)

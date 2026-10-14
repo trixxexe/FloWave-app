@@ -718,20 +718,17 @@ fun MainScreen() {
                         onStartUrlDownload = { url ->
                             coroutineScope.launch {
                                 val info = downloader.inspect(url).getOrNull()?.firstOrNull()
-                                if (info == null) {
-                                    Toast.makeText(context, "Unable to inspect this URL", Toast.LENGTH_SHORT).show()
+                                val targetUrl = info?.webpageUrl ?: url
+                                val intent = android.content.Intent(context, FloWaveDownloadService::class.java).apply {
+                                    putExtra(FloWaveDownloadService.EXTRA_URL, targetUrl)
+                                    putExtra(FloWaveDownloadService.EXTRA_TITLE, info?.title ?: targetUrl)
+                                    putExtra(FloWaveDownloadService.EXTRA_ARTIST, info?.creator ?: "Online download")
+                                    putExtra(FloWaveDownloadService.EXTRA_THUMBNAIL, info?.thumbnailUrl)
+                                }
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                    context.startForegroundService(intent)
                                 } else {
-                                    val intent = android.content.Intent(context, FloWaveDownloadService::class.java).apply {
-                                        putExtra(FloWaveDownloadService.EXTRA_URL, info.webpageUrl)
-                                        putExtra(FloWaveDownloadService.EXTRA_TITLE, info.title)
-                                        putExtra(FloWaveDownloadService.EXTRA_ARTIST, info.creator)
-                                        putExtra(FloWaveDownloadService.EXTRA_THUMBNAIL, info.thumbnailUrl)
-                                    }
-                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                        context.startForegroundService(intent)
-                                    } else {
-                                        context.startService(intent)
-                                    }
+                                    context.startService(intent)
                                 }
                             }
                         },

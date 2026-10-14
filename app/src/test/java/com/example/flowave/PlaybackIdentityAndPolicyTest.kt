@@ -100,8 +100,19 @@ class PlaybackIdentityAndPolicyTest {
         assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://m.youtube.com/watch?v=abc123xyz")))
         assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://music.youtube.com/watch?v=abc123xyz")))
         assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://youtu.be/abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://www.youtube.com/shorts/abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://www.youtube.com/embed/abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId("https://rr2---sn.googlevideo.com/videoplayback?expire=123&id=abc123xyz&itag=140"))
         assertEquals("abc123xyz", PlaybackIdentity.extractVideoId("yt_abc123xyz"))
         assertEquals("abc123xyz", PlaybackIdentity.extractVideoId("abc123xyz"))
+    }
+
+    @Test
+    fun testUrlUtilsDelegation() {
+        assertEquals("abc123xyz", com.example.flowave.utils.UrlUtils.extractVideoId("flowave://youtube/abc123xyz"))
+        assertEquals("abc123xyz", com.example.flowave.utils.UrlUtils.extractVideoId("https://www.youtube.com/shorts/abc123xyz"))
+        assertEquals("abc123xyz", com.example.flowave.utils.UrlUtils.extractVideoId("https://www.youtube.com/embed/abc123xyz"))
+        assertEquals("abc123xyz", com.example.flowave.utils.UrlUtils.extractVideoId("yt_abc123xyz"))
     }
 
     @Test
@@ -119,6 +130,7 @@ class PlaybackIdentityAndPolicyTest {
         assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("flowave://abc123xyz")))
         assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("https://www.youtube.com/watch?v=abc123xyz")))
         assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("https://youtu.be/abc123xyz")))
+        assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("https://rr1---sn.googlevideo.com/videoplayback?expire=123")))
         assertFalse(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("file:///storage/music.mp3")))
     }
 }

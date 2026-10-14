@@ -40,6 +40,15 @@ class FloWaveNativeDownloaderTest {
     }
 
     @Test
+    fun testDetermineExtensionFromMimeType() {
+        val genericUrl = "https://example.com/stream"
+        assertEquals("m4a", downloader.determineExtension(genericUrl, DownloadOptions(), "audio/mp4"))
+        assertEquals("opus", downloader.determineExtension(genericUrl, DownloadOptions(), "audio/webm; codecs=\"opus\""))
+        assertEquals("opus", downloader.determineExtension(genericUrl, DownloadOptions(), "audio/webm"))
+        assertEquals("webm", downloader.determineExtension(genericUrl, DownloadOptions(), "video/webm"))
+    }
+
+    @Test
     fun testFormatSpeed() {
         assertEquals("3.5 MB/s", downloader.formatSpeed(3.5f * 1024 * 1024))
         assertEquals("512 KB/s", downloader.formatSpeed(512f * 1024))

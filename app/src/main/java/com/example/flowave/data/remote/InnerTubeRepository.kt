@@ -342,7 +342,7 @@ open class InnerTubeRepository(context: Context? = null) {
         // ENGINE 2: Embedded yt-dlp search fallback (On-device fallback)
         if (YtDlpBinaryValidator.isRuntimeAvailable(appContext) && FloWaveRuntime.awaitReady(2_000L)) {
             try {
-                val ytDlpResults = localStreamResolver.inspect("ytsearch15:$query").getOrNull()
+                val ytDlpResults = localStreamResolver.inspect("ytsearch15:$query", allowFallbackToNative = false).getOrNull()
                 if (!ytDlpResults.isNullOrEmpty()) {
                     val mapped = ytDlpResults.mapNotNull { item ->
                         val id = item.id ?: item.webpageUrl.substringAfter("v=").takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -631,7 +631,7 @@ open class InnerTubeRepository(context: Context? = null) {
 
         // 2. Embedded yt-dlp resolver (Safe, on-device, handles BotGuard & signature challenges)
         if (YtDlpBinaryValidator.isRuntimeAvailable(appContext) && FloWaveRuntime.awaitReady(2_000L)) {
-            val result = localStreamResolver.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId")
+            val result = localStreamResolver.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId", allowFallbackToNative = false)
             result.onSuccess { resolved ->
                 logger?.info("online", "embedded_resolver_succeeded", context = mapOf("videoId" to videoId))
                 val resolvedSource = ResolvedStreamSource(

@@ -2,6 +2,9 @@ package com.example.flowave.utils
 
 object UrlUtils {
     fun extractVideoId(url: String): String? {
+        val identityExtracted = com.example.flowave.audio.PlaybackIdentity.extractVideoId(url)
+        if (!identityExtracted.isNullOrBlank()) return identityExtracted
+
         val cleanUrl = url.trim()
         val patterns = listOf(
             Regex("youtube\\.com/watch\\?v=([^&]+)"),

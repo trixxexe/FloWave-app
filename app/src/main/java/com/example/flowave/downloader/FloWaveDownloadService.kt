@@ -192,16 +192,22 @@ class FloWaveDownloadService : Service() {
         } finally {
             runCatching { retriever.release() }
         }
-        val title = file.nameWithoutExtension.substringBeforeLast(" [").ifBlank { file.nameWithoutExtension }
+        val entry = downloadDao.getDownloadById(taskId)
+        val title = entry?.trackTitle?.takeIf { it.isNotBlank() && !it.startsWith("http") }
+            ?: file.nameWithoutExtension.substringBeforeLast(" [").ifBlank { file.nameWithoutExtension }
+        val artist = entry?.artistName?.takeIf { it.isNotBlank() && it != "Online download" } ?: "Downloaded"
+        val artworkUri = entry?.thumbnailUrl
+
         downloadDao.markCompleted(taskId, file.absolutePath, DownloadStatus.DONE, System.currentTimeMillis())
         repository.insertTrack(
             Track(
                 id = "dl_$taskId",
                 title = title,
-                artist = "Downloaded",
+                artist = artist,
                 album = "Downloaded",
                 durationMs = durationMs,
                 mediaUri = file.absolutePath,
+                artworkUri = artworkUri,
                 isOnline = false,
                 source = "DOWNLOADED",
                 folderPath = file.parent

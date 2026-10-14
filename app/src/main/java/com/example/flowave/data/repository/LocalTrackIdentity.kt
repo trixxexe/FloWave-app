@@ -8,8 +8,10 @@ object LocalTrackIdentity {
         "mp3", "m4a", "mp4", "aac", "ogg", "oga", "opus", "flac", "wav", "amr", "3gp", "mid", "midi"
     )
 
-    fun isSupportedAudioName(name: String): Boolean =
-        name.substringAfterLast('.', "").lowercase() in supportedExtensions
+    fun isSupportedAudioName(name: String): Boolean {
+        if (com.example.flowave.audio.PlaybackIdentity.isOnlineUri(name)) return false
+        return name.substringAfterLast('.', "").lowercase() in supportedExtensions
+    }
 
     fun stableId(uri: String): String = "imported_" + sha256(uri).take(32)
 

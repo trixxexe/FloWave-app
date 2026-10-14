@@ -614,6 +614,7 @@ class FloWaveAudioEngine(private val context: Context) {
     @OptIn(UnstableApi::class)
     private fun setupAudioEffects(audioSessionId: Int) {
         if (audioSessionId == C.AUDIO_SESSION_ID_UNSET || audioSessionId == 0) return
+        releaseAudioEffects()
         
         try {
             equalizer = Equalizer(0, audioSessionId).apply { enabled = true }
@@ -649,6 +650,14 @@ class FloWaveAudioEngine(private val context: Context) {
             android.util.Log.w("FloWaveAudioEngine", "PresetReverb not available: ${t.message}")
             presetReverb = null
         }
+    }
+
+    private fun releaseAudioEffects() {
+        try { equalizer?.release() } catch (_: Throwable) {} finally { equalizer = null }
+        try { bassBoost?.release() } catch (_: Throwable) {} finally { bassBoost = null }
+        try { virtualizer?.release() } catch (_: Throwable) {} finally { virtualizer = null }
+        try { loudnessEnhancer?.release() } catch (_: Throwable) {} finally { loudnessEnhancer = null }
+        try { presetReverb?.release() } catch (_: Throwable) {} finally { presetReverb = null }
     }
 
     fun stopPlayback() {
@@ -1243,45 +1252,7 @@ class FloWaveAudioEngine(private val context: Context) {
             android.util.Log.e("FloWaveAudioEngine", "Error releasing exoPlayer", e)
         }
 
-        try {
-            equalizer?.release()
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Error releasing Equalizer", e)
-        } finally {
-            equalizer = null
-        }
-
-        try {
-            bassBoost?.release()
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Error releasing BassBoost", e)
-        } finally {
-            bassBoost = null
-        }
-
-        try {
-            virtualizer?.release()
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Error releasing Virtualizer", e)
-        } finally {
-            virtualizer = null
-        }
-
-        try {
-            loudnessEnhancer?.release()
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Error releasing LoudnessEnhancer", e)
-        } finally {
-            loudnessEnhancer = null
-        }
-
-        try {
-            presetReverb?.release()
-        } catch (e: Exception) {
-            android.util.Log.e("FloWaveAudioEngine", "Error releasing PresetReverb", e)
-        } finally {
-            presetReverb = null
-        }
+        releaseAudioEffects()
 
         // Release the audio SimpleCache
         FloWaveCacheManager.releaseCache()

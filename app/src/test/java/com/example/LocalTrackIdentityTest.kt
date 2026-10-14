@@ -13,6 +13,9 @@ class LocalTrackIdentityTest {
         assertTrue(LocalTrackIdentity.isSupportedAudioName("Album/Track.FLAC"))
         assertTrue(LocalTrackIdentity.isSupportedAudioName("track.m4a"))
         assertFalse(LocalTrackIdentity.isSupportedAudioName("cover.jpg"))
+        assertFalse(LocalTrackIdentity.isSupportedAudioName("flowave://youtube/abc123xyz.mp3"))
+        assertFalse(LocalTrackIdentity.isSupportedAudioName("https://www.youtube.com/watch?v=abc123xyz"))
+        assertFalse(LocalTrackIdentity.isSupportedAudioName("https://rr1---sn.googlevideo.com/videoplayback?expire=123.mp4"))
     }
 
     @Test
