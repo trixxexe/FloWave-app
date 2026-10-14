@@ -76,7 +76,7 @@ class FloWaveNativeDownloader(
         send(DownloadState.Preparing)
         logger.info("native_downloader", "resolving_stream", context = mapOf("videoId" to videoId))
 
-        val resolution = try {
+        var currentResolution = try {
             innerTubeRepo.getStreamResolution(videoId)
         } catch (e: Exception) {
             logger.error("native_downloader", "stream_resolution_failed", context = mapOf("videoId" to videoId), throwable = e)
@@ -84,14 +84,41 @@ class FloWaveNativeDownloader(
             return@channelFlow
         }
 
-        val streamUrl = resolution.url
-        val userAgent = resolution.userAgent.ifBlank { DEFAULT_USER_AGENT }
-        val requestHeaders = resolution.requestHeaders
+        var streamUrl = currentResolution.url
+        var userAgent = currentResolution.userAgent?.ifBlank { DEFAULT_USER_AGENT } ?: DEFAULT_USER_AGENT
+        var requestHeaders = currentResolution.requestHeaders
+        var streamRefreshed = false
+
+        suspend fun refreshStreamUrlOnce(): Boolean {
+            if (streamRefreshed) return false
+            streamRefreshed = true
+            return try {
+                logger.info("native_downloader", "refreshing_expired_stream", context = mapOf("videoId" to videoId))
+                innerTubeRepo.invalidateStreamUrl(videoId)
+                val refreshed = innerTubeRepo.getStreamResolution(videoId, forceRefresh = true)
+                currentResolution = refreshed
+                streamUrl = refreshed.url
+                userAgent = refreshed.userAgent?.ifBlank { DEFAULT_USER_AGENT } ?: DEFAULT_USER_AGENT
+                requestHeaders = refreshed.requestHeaders
+                true
+            } catch (e: Exception) {
+                logger.warn("native_downloader", "stream_refresh_failed", context = mapOf("videoId" to videoId), throwable = e)
+                false
+            }
+        }
+
+        // Probe total content length using Range: bytes=0-0 and detect Content-Type
+        var (totalLength, mimeType) = probeStream(streamUrl, userAgent, requestHeaders)
+        if (totalLength < 0L && refreshStreamUrlOnce()) {
+            val retryProbe = probeStream(streamUrl, userAgent, requestHeaders)
+            totalLength = retryProbe.first
+            mimeType = retryProbe.second
+        }
 
         // Fetch metadata to form a clean filename
         val metadata = runCatching { innerTubeRepo.getTrackMetadata(videoId) }.getOrNull()
         val title = metadata?.title ?: "Audio_$videoId"
-        val extension = determineExtension(streamUrl, options)
+        val extension = determineExtension(streamUrl, options, mimeType)
         val safeBaseName = DownloadInput.safeFileName("$title [$videoId]")
         val targetFile = File(outputDir, "$safeBaseName.$extension")
         val partFile = File(outputDir, "$safeBaseName.$extension.part")
@@ -101,9 +128,6 @@ class FloWaveNativeDownloader(
             "extension" to extension,
             "targetFile" to targetFile.name
         ))
-
-        // Probe total content length using Range: bytes=0-0
-        val totalLength = probeContentLength(streamUrl, userAgent, requestHeaders)
 
         try {
             var downloadedBytes = 0L
@@ -129,11 +153,24 @@ class FloWaveNativeDownloader(
                             .header("Range", "bytes=$downloadedBytes-$endBytes")
                             .build()
 
-                        httpClient.newCall(chunkRequest).execute().use { response ->
-                            if (!response.isSuccessful && response.code != 206) {
-                                throw IOException("Server returned HTTP ${response.code} downloading chunk $downloadedBytes-$endBytes")
+                        var response = httpClient.newCall(chunkRequest).execute()
+                        if (!response.isSuccessful && response.code != 206) {
+                            val code = response.code
+                            response.close()
+                            if ((code == 403 || code == 410) && refreshStreamUrlOnce()) {
+                                val retryRequest = buildRequest(streamUrl, userAgent, requestHeaders)
+                                    .header("Range", "bytes=$downloadedBytes-$endBytes")
+                                    .build()
+                                response = httpClient.newCall(retryRequest).execute()
                             }
-                            val body = response.body ?: throw IOException("Empty chunk response body")
+                        }
+                        if (!response.isSuccessful && response.code != 206) {
+                            val code = response.code
+                            response.close()
+                            throw IOException("Server returned HTTP $code downloading chunk $downloadedBytes-$endBytes")
+                        }
+                        response.use { resp ->
+                            val body = resp.body ?: throw IOException("Empty chunk response body")
                             val buffer = ByteArray(8192)
                             val input = body.byteStream()
                             var read: Int
@@ -165,12 +202,22 @@ class FloWaveNativeDownloader(
                     }
                 } else {
                     // Total length unknown, stream directly
-                    val directRequest = buildRequest(streamUrl, userAgent, requestHeaders).build()
-                    httpClient.newCall(directRequest).execute().use { response ->
-                        if (!response.isSuccessful) {
-                            throw IOException("Server returned HTTP ${response.code}")
+                    var directRequest = buildRequest(streamUrl, userAgent, requestHeaders).build()
+                    var directResponse = httpClient.newCall(directRequest).execute()
+                    if (!directResponse.isSuccessful && (directResponse.code == 403 || directResponse.code == 410)) {
+                        directResponse.close()
+                        if (refreshStreamUrlOnce()) {
+                            directRequest = buildRequest(streamUrl, userAgent, requestHeaders).build()
+                            directResponse = httpClient.newCall(directRequest).execute()
                         }
-                        val body = response.body ?: throw IOException("Empty response body")
+                    }
+                    if (!directResponse.isSuccessful) {
+                        val code = directResponse.code
+                        directResponse.close()
+                        throw IOException("Server returned HTTP $code")
+                    }
+                    directResponse.use { resp ->
+                        val body = resp.body ?: throw IOException("Empty response body")
                         val buffer = ByteArray(8192)
                         val input = body.byteStream()
                         var read: Int
@@ -243,30 +290,42 @@ class FloWaveNativeDownloader(
         return builder
     }
 
-    private fun probeContentLength(url: String, userAgent: String, headers: Map<String, String>): Long {
+    private fun probeStream(url: String, userAgent: String, headers: Map<String, String>): Pair<Long, String?> {
         return runCatching {
             val req = buildRequest(url, userAgent, headers)
                 .header("Range", "bytes=0-0")
                 .build()
             httpClient.newCall(req).execute().use { resp ->
+                val mime = resp.header("Content-Type")
+                var len = -1L
                 if (resp.isSuccessful || resp.code == 206) {
                     val cr = resp.header("Content-Range")
                     if (cr != null && cr.contains("/")) {
                         val total = cr.substringAfterLast("/").trim().toLongOrNull()
-                        if (total != null && total > 0L) return@runCatching total
+                        if (total != null && total > 0L) len = total
                     }
-                    val cl = resp.header("Content-Length")?.toLongOrNull()
-                    if (cl != null && cl > 1L) return@runCatching cl
+                    if (len <= 0L) {
+                        val cl = resp.header("Content-Length")?.toLongOrNull()
+                        if (cl != null && cl > 1L) len = cl
+                    }
                 }
-                -1L
+                Pair(len, mime)
             }
-        }.getOrDefault(-1L)
+        }.getOrDefault(Pair(-1L, null))
     }
 
-    fun determineExtension(streamUrl: String, options: DownloadOptions): String {
+    fun probeContentLength(url: String, userAgent: String, headers: Map<String, String>): Long {
+        return probeStream(url, userAgent, headers).first
+    }
+
+    fun determineExtension(streamUrl: String, options: DownloadOptions = DownloadOptions(), mimeType: String? = null): String {
+        val lowerMime = mimeType?.lowercase() ?: ""
+        val lowerUrl = streamUrl.lowercase()
         return when {
-            streamUrl.contains("itag=140") || streamUrl.contains("audio/mp4") -> "m4a"
-            streamUrl.contains("itag=251") || streamUrl.contains("audio/webm") -> "opus"
+            lowerMime.contains("audio/mp4") || lowerMime.contains("mp4") || lowerUrl.contains("audio%2fmp4") || lowerUrl.contains("audio/mp4") || lowerUrl.contains("itag=140") -> "m4a"
+            lowerMime.contains("opus") || lowerUrl.contains("itag=251") || lowerUrl.contains("itag=250") || lowerUrl.contains("itag=249") -> "opus"
+            lowerMime.contains("audio/webm") || lowerUrl.contains("audio%2fwebm") || lowerUrl.contains("audio/webm") -> "opus"
+            lowerMime.contains("webm") || lowerUrl.contains("webm") -> "webm"
             options.audioFormat.isNotBlank() && options.audioFormat.lowercase() in setOf("m4a", "opus", "webm", "mp3", "aac") -> options.audioFormat.lowercase()
             else -> "m4a"
         }

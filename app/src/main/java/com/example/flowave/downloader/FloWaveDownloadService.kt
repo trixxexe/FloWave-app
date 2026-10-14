@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.example.flowave.data.local.AppDatabase
 import com.example.flowave.data.model.DownloadEntry
 import com.example.flowave.data.model.DownloadStatus
@@ -24,7 +25,7 @@ import java.util.UUID
 
 class FloWaveDownloadService : Service() {
     private val serviceJob = Job()
-    private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
+    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private lateinit var downloadEngine: SealStyleDownloadEngine
     private val lock = Any()
     private val activeTasks = mutableMapOf<String, Job>()
@@ -67,11 +68,16 @@ class FloWaveDownloadService : Service() {
         )
 
         val initialNotification = buildNotification("Initializing download...")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, initialNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, initialNotification)
-        }
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            initialNotification,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            } else {
+                0
+            }
+        )
 
         val job = serviceScope.launch {
             try {
@@ -201,6 +207,13 @@ class FloWaveDownloadService : Service() {
                 folderPath = file.parent
             )
         )
+        android.media.MediaScannerConnection.scanFile(
+            this,
+            arrayOf(file.absolutePath),
+            null
+        ) { path, uri ->
+            android.util.Log.d("FloWaveDownloadService", "MediaScanner indexed $path: uri=$uri")
+        }
     }
 
     companion object {

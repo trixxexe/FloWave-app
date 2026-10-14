@@ -28,6 +28,7 @@ class FloWaveApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        appContext = this
         runtimeScope.launch {
             val libDir = applicationInfo.nativeLibraryDir?.let { java.io.File(it) }
             val pythonZip = libDir?.let { java.io.File(it, "libpython.zip.so") }

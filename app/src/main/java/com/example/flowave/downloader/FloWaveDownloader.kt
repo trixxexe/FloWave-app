@@ -114,6 +114,13 @@ class FloWaveDownloader(
                 folderPath = file.parent
             )
         )
+        android.media.MediaScannerConnection.scanFile(
+            context,
+            arrayOf(file.absolutePath),
+            null
+        ) { path, uri ->
+            android.util.Log.d(TAG, "MediaScanner indexed $path: uri=$uri")
+        }
     }
 
     suspend fun startDownload(track: InnerTubeTrack) {
@@ -161,6 +168,12 @@ class FloWaveDownloader(
                 status = DownloadStatus.DOWNLOADING
             )
         )
+
+        val outputDir = File(
+            context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: context.filesDir,
+            "FloWaveDownloads"
+        )
+        if (!outputDir.exists()) outputDir.mkdirs()
 
         val downloadFlow = if (sealEngine.isAvailable()) {
             sealEngine.executeDownload(sourceUrl, outputDir)
@@ -236,6 +249,13 @@ class FloWaveDownloader(
                 folderPath = musicDir.absolutePath
             )
         )
+        android.media.MediaScannerConnection.scanFile(
+            context,
+            arrayOf(file.absolutePath),
+            null
+        ) { path, uri ->
+            android.util.Log.d(TAG, "MediaScanner indexed $path: uri=$uri")
+        }
         return true
     }
 

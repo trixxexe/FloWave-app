@@ -339,6 +339,12 @@ class FloWaveAudioEngine(private val context: Context) {
                         updateFormatInfo()
                     }
 
+                    override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                        if (audioSessionId != C.AUDIO_SESSION_ID_UNSET && audioSessionId != 0) {
+                            setupAudioEffects(audioSessionId)
+                        }
+                    }
+
                     override fun onPositionDiscontinuity(
                         oldPosition: Player.PositionInfo,
                         newPosition: Player.PositionInfo,
@@ -491,7 +497,9 @@ class FloWaveAudioEngine(private val context: Context) {
         }
 
         exoPlayer?.audioSessionId?.let { sessionId ->
-            setupAudioEffects(sessionId)
+            if (sessionId != C.AUDIO_SESSION_ID_UNSET && sessionId != 0) {
+                setupAudioEffects(sessionId)
+            }
         }
     }
 
@@ -744,6 +752,7 @@ class FloWaveAudioEngine(private val context: Context) {
 
         player.setMediaItems(playableEntries.map { it.second }, effectiveIndex, 0L)
         player.prepare()
+        player.playWhenReady = true
         player.play()
         persistQueueAndState()
     }

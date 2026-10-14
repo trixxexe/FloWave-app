@@ -74,8 +74,17 @@ object YtDlpBinaryValidator {
      */
     fun isRuntimeAvailable(context: Context?): Boolean {
         if (!FloWaveRuntime.ready) return false
-        if (context != null && !isAssetValid(context)) {
-            return false
+        if (context == null) return false
+        if (!isAssetValid(context)) {
+            val candidatePaths = listOfNotNull(
+                File(context.filesDir, "yt-dlp"),
+                File(context.filesDir, "bin/yt-dlp"),
+                File(context.noBackupFilesDir, "youtubedl-android/yt-dlp"),
+                context.applicationInfo?.nativeLibraryDir?.let { File(it, "libyt-dlp.so") }
+            )
+            if (!candidatePaths.any { isBinaryValid(it) }) {
+                return false
+            }
         }
         return true
     }

@@ -91,8 +91,17 @@
 -keep class com.example.flowave.data.model.** { *; }
 -keep class com.example.flowave.utils.FloWaveConstants { *; }
 -keep class com.example.flowave.utils.SettingsSchema { *; }
+-keep class com.example.flowave.downloader.DownloadModelsKt { *; }
+-keep class com.example.flowave.downloader.DownloadMediaInfo { *; }
+-keep class com.example.flowave.downloader.DownloadOptions { *; }
+-keep class com.example.flowave.downloader.DownloadMediaKind { *; }
 -keep class com.example.flowave.downloader.DownloadState { *; }
 -keep class com.example.flowave.downloader.DownloadState$* { *; }
+-keep class com.example.flowave.data.remote.InnerTubeParser { *; }
+-keep class com.example.flowave.data.remote.InnerTubeParser$* { *; }
+-keep class com.example.flowave.data.remote.InnerTubeClients { *; }
+-keep class com.example.flowave.data.remote.ResolvedStreamSource { *; }
+-keep class com.example.flowave.data.remote.InnerTubeClientConfig { *; }
 
 # ── Enum classes ─────────────────────────────────────────────
 -keepclassmembers enum * {

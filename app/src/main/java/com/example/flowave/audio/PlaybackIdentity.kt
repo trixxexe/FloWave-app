@@ -37,10 +37,14 @@ object PlaybackIdentity {
 
     fun isLocalUri(uriStr: String?): Boolean {
         if (uriStr.isNullOrBlank()) return false
-        val lower = uriStr.trim().lowercase()
+        if (isOnlineUri(uriStr)) return false
+        val s = uriStr.trim()
+        val lower = s.lowercase()
         return lower.startsWith("file:") ||
             lower.startsWith("content:") ||
-            lower.startsWith("android.resource:")
+            lower.startsWith("android.resource:") ||
+            s.startsWith("/") ||
+            s.matches(Regex("^[A-Za-z]:[\\\\/].*"))
     }
 
     fun isLocalUri(uri: Uri?): Boolean = isLocalUri(uri?.toString())
@@ -50,7 +54,8 @@ object PlaybackIdentity {
         val lower = uriStr.trim().lowercase()
         return lower.startsWith("flowave:") ||
             lower.contains("youtube.com") ||
-            lower.contains("youtu.be")
+            lower.contains("youtu.be") ||
+            lower.startsWith(ONLINE_PREFIX)
     }
 
     fun isOnlineUri(uri: Uri?): Boolean = isOnlineUri(uri?.toString())
