@@ -232,4 +232,70 @@ class FloWaveDataSourceTest {
         // Subsequent resolution must re-query the repository rather than returning a stale broken stream
         assertEquals(1, mockRepo.resolutionCount.get())
     }
+
+    @Test
+    fun `defaultHttpDataSource uses exact ANDROID_VR user agent and configured timeouts`() {
+        val factory = FloWaveDataSourceFactory(context)
+        assertEquals(
+            "com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12; en_US; Quest 2; Build/SQ3A.220605.009.A1) gzip",
+            FloWaveDataSourceFactory.ANDROID_VR_USER_AGENT
+        )
+        assertNotNull(factory.defaultHttpDataSourceFactory)
+        assertNotNull(factory.cacheDataSourceFactory)
+        assertNotNull(factory.resolvingDataSourceFactory)
+    }
+
+    @Test
+    fun `local file and content uris route directly without invoking stream repository`() {
+        val mockRepo = MockStreamRepository()
+        val factory = FloWaveDataSourceFactory(context, mockRepo)
+
+        val fileSpec = DataSpec(Uri.parse("file:///data/local/music.mp3"))
+        val resolvedFileSpec = factory.resolveStreamDataSpec(fileSpec)
+        assertEquals(fileSpec.uri, resolvedFileSpec.uri)
+        assertEquals(0, mockRepo.resolutionCount.get())
+
+        val contentSpec = DataSpec(Uri.parse("content://media/external/audio/123"))
+        val resolvedContentSpec = factory.resolveStreamDataSpec(contentSpec)
+        assertEquals(contentSpec.uri, resolvedContentSpec.uri)
+        assertEquals(0, mockRepo.resolutionCount.get())
+    }
+
+    @Test
+    fun `resolveStreamDataSpec sets stable videoId key and matching request headers on DataSpec`() {
+        val mockRepo = MockStreamRepository()
+        val videoId = "stable_vid_123"
+        mockRepo.results[videoId] = ResolvedStreamSource(
+            url = "https://rr1---sn-abc.googlevideo.com/videoplayback?expire=999999",
+            resolver = "inner_tube",
+            candidateKey = "ANDROID_VR",
+            userAgent = FloWaveDataSourceFactory.ANDROID_VR_USER_AGENT,
+            requestHeaders = mapOf("X-YouTube-Client-Name" to "28")
+        )
+
+        val factory = FloWaveDataSourceFactory(context, mockRepo)
+        val dataSpec = DataSpec(Uri.parse("flowave://youtube/$videoId"))
+        val resolvedSpec = factory.resolveStreamDataSpec(dataSpec)
+
+        assertEquals("stable_vid_123", resolvedSpec.key)
+        assertEquals(Uri.parse("https://rr1---sn-abc.googlevideo.com/videoplayback?expire=999999"), resolvedSpec.uri)
+        assertEquals(FloWaveDataSourceFactory.ANDROID_VR_USER_AGENT, resolvedSpec.httpRequestHeaders["User-Agent"])
+        assertEquals("https://www.youtube.com", resolvedSpec.httpRequestHeaders["Origin"])
+        assertEquals("https://www.youtube.com/", resolvedSpec.httpRequestHeaders["Referer"])
+        assertEquals("28", resolvedSpec.httpRequestHeaders["X-YouTube-Client-Name"])
+    }
+
+    @Test
+    fun `resolveStreamDataSpec resolves youtube watch url just-in-time`() {
+        val mockRepo = MockStreamRepository()
+        val videoId = "watch_vid_456"
+        val factory = FloWaveDataSourceFactory(context, mockRepo)
+
+        val watchSpec = DataSpec(Uri.parse("https://www.youtube.com/watch?v=$videoId"))
+        val resolvedSpec = factory.resolveStreamDataSpec(watchSpec)
+
+        assertEquals(videoId, resolvedSpec.key)
+        assertEquals(Uri.parse("https://media.example.test/stream/$videoId.webm"), resolvedSpec.uri)
+        assertEquals(1, mockRepo.resolutionCount.get())
+    }
 }

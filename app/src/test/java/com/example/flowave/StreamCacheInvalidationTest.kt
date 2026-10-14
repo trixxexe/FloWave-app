@@ -51,4 +51,19 @@ class StreamCacheInvalidationTest {
         assertEquals("YOUTUBE", track.source)
         assertEquals(240000L, track.durationMs)
     }
+
+    @Test
+    fun testFloWaveCacheManagerInvalidate() {
+        // Invalidation should succeed silently without errors
+        com.example.flowave.audio.FloWaveCacheManager.invalidate("test_video_123")
+    }
+
+    @Test
+    fun testRetryableHttpStatusCodes() {
+        assertTrue(com.example.flowave.audio.OnlinePlaybackPolicy.isRefreshableHttpStatus(403))
+        assertTrue(com.example.flowave.audio.OnlinePlaybackPolicy.isRefreshableHttpStatus(410))
+        assertTrue(com.example.flowave.audio.OnlinePlaybackPolicy.isRefreshableHttpStatus(500))
+        assertFalse(com.example.flowave.audio.OnlinePlaybackPolicy.isRefreshableHttpStatus(400))
+        assertFalse(com.example.flowave.audio.OnlinePlaybackPolicy.isRefreshableHttpStatus(401))
+    }
 }

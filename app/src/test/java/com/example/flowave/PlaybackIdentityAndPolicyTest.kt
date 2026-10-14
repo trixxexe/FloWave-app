@@ -86,4 +86,34 @@ class PlaybackIdentityAndPolicyTest {
         assertEquals("dns_unavailable", OnlinePlaybackPolicy.classifyResolverFailure(UnknownHostException("pipedapi.nosebs.ru")))
         assertEquals("timeout", OnlinePlaybackPolicy.classifyResolverFailure(SocketTimeoutException("Read timed out")))
     }
+
+    @Test
+    fun testExtractVideoIdFromVariousFormats() {
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("flowave://youtube/abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("flowave://abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://www.youtube.com/watch?v=abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://m.youtube.com/watch?v=abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://music.youtube.com/watch?v=abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId(android.net.Uri.parse("https://youtu.be/abc123xyz")))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId("yt_abc123xyz"))
+        assertEquals("abc123xyz", PlaybackIdentity.extractVideoId("abc123xyz"))
+    }
+
+    @Test
+    fun testIsLocalUri() {
+        assertTrue(PlaybackIdentity.isLocalUri(android.net.Uri.parse("file:///storage/emulated/0/Music/song.mp3")))
+        assertTrue(PlaybackIdentity.isLocalUri(android.net.Uri.parse("content://media/external/audio/media/1234")))
+        assertTrue(PlaybackIdentity.isLocalUri(android.net.Uri.parse("android.resource://com.example.flowave/raw/sample")))
+        assertFalse(PlaybackIdentity.isLocalUri(android.net.Uri.parse("https://googlevideo.com/videoplayback")))
+        assertFalse(PlaybackIdentity.isLocalUri(android.net.Uri.parse("flowave://youtube/abc123xyz")))
+    }
+
+    @Test
+    fun testIsOnlineUri() {
+        assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("flowave://youtube/abc123xyz")))
+        assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("flowave://abc123xyz")))
+        assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("https://www.youtube.com/watch?v=abc123xyz")))
+        assertTrue(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("https://youtu.be/abc123xyz")))
+        assertFalse(PlaybackIdentity.isOnlineUri(android.net.Uri.parse("file:///storage/music.mp3")))
+    }
 }

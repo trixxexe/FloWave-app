@@ -1,5 +1,6 @@
 package com.example.flowave.audio
 
+import android.net.Uri
 import com.example.flowave.data.model.Track
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -8,9 +9,60 @@ import javax.net.ssl.SSLException
 
 /** Stable identity rules shared by UI, persistence and the Media3 data source. */
 object PlaybackIdentity {
-    private const val ONLINE_PREFIX = "yt_"
+    const val ONLINE_PREFIX = "yt_"
+
+    fun extractVideoId(uri: Uri?): String? {
+        if (uri == null) return null
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == "flowave") {
+            val authority = uri.authority
+            if (authority == "youtube") {
+                return uri.lastPathSegment?.takeIf { it.isNotBlank() }
+            }
+            if (!authority.isNullOrBlank() && (uri.path.isNullOrEmpty() || uri.path == "/")) {
+                return authority
+            }
+            return uri.lastPathSegment?.takeIf { it.isNotBlank() }
+        }
+        val host = uri.host?.lowercase().orEmpty()
+        if (host.contains("youtube.com")) {
+            return uri.getQueryParameter("v")?.takeIf { it.isNotBlank() }
+        }
+        if (host.contains("youtu.be")) {
+            return uri.lastPathSegment?.takeIf { it.isNotBlank() }
+        }
+        val s = uri.toString()
+        if (!s.contains("://") && s.isNotBlank()) {
+            return s.removePrefix(ONLINE_PREFIX).takeIf { it.isNotBlank() }
+        }
+        return null
+    }
+
+    fun extractVideoId(uriOrId: String?): String? {
+        if (uriOrId.isNullOrBlank()) return null
+        return try {
+            extractVideoId(Uri.parse(uriOrId))
+        } catch (_: Exception) {
+            uriOrId.removePrefix(ONLINE_PREFIX).takeIf { it.isNotBlank() }
+        }
+    }
+
+    fun isLocalUri(uri: Uri?): Boolean {
+        if (uri == null) return false
+        val scheme = uri.scheme?.lowercase()
+        return scheme == "file" || scheme == "content" || scheme == "android.resource"
+    }
+
+    fun isOnlineUri(uri: Uri?): Boolean {
+        if (uri == null) return false
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == "flowave") return true
+        val host = uri.host?.lowercase().orEmpty()
+        return host.contains("youtube.com") || host.contains("youtu.be")
+    }
 
     fun sourceId(track: Track): String? = track.sourceId?.takeIf { it.isNotBlank() }
+        ?: extractVideoId(track.mediaUri)?.takeIf { it.isNotBlank() }
         ?: track.id.removePrefix(ONLINE_PREFIX).takeIf { track.isOnline && it.isNotBlank() }
 
     fun canonical(track: Track): Track {

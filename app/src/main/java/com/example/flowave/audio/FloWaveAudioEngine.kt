@@ -385,103 +385,55 @@ class FloWaveAudioEngine(private val context: Context) {
                             ))
                             return
                         }
-                        android.util.Log.e("FloWaveAudioEngine", "Player error encountered: ${error.message}", error)
-                        _playbackState.value = _playbackState.value.copy(
-                            isBuffering = false,
-                            errorMessage = error.localizedMessage ?: error.message ?: "Playback failed"
-                        )
-                        
-                        val now = System.currentTimeMillis()
-                        if (now - lastErrorToastTime > 5000L) {
-                            lastErrorToastTime = now
-                            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                android.widget.Toast.makeText(context, "Playback error: ${error.localizedMessage ?: error.message}", android.widget.Toast.LENGTH_LONG).show()
-                            }
-                        }
-                        
+
                         val currentTrack = _playbackState.value.currentTrack
                         if (currentTrack != null && currentTrack.isOnline) {
                             val sourceId = PlaybackIdentity.sourceId(currentTrack)
-                            if (sourceId != null) {
-                                innerTubeRepo.markUnplayableStream(
-                                    sourceId,
-                                    "media3_${error.errorCodeName.lowercase()}"
+                            val httpStatus = httpStatusCode(error)
+                            val isHttpOrNetworkError = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
+                                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                                (httpStatus != null && OnlinePlaybackPolicy.isRefreshableHttpStatus(httpStatus))
+
+                            val retries = trackRetryCount.getOrDefault(currentTrack.id, 0)
+                            if (isHttpOrNetworkError && retries < 1 && networkAvailable) {
+                                trackRetryCount[currentTrack.id] = retries + 1
+                                if (sourceId != null) {
+                                    innerTubeRepo.invalidateStreamUrl(sourceId)
+                                    FloWaveCacheManager.invalidate(sourceId)
+                                }
+                                val currentPos = _playbackState.value.currentPositionMs
+                                val curIndex = exoPlayer?.currentMediaItemIndex ?: 0
+                                android.util.Log.w(
+                                    "FloWaveAudioEngine",
+                                    "Automatic single retry for online track ${currentTrack.id} after HTTP/network error (status=$httpStatus, code=${error.errorCode})"
                                 )
-                                innerTubeRepo.invalidateStreamUrl(sourceId)
-                                FloWaveCacheManager.invalidate(sourceId)
+                                onlineRecoveryJob?.cancel()
+                                onlineRecoveryJob = scope.launch {
+                                    try {
+                                        if (_playbackState.value.currentTrack?.id != currentTrack.id) return@launch
+                                        exoPlayer?.prepare()
+                                        exoPlayer?.seekTo(curIndex, currentPos)
+                                        exoPlayer?.play()
+                                        android.util.Log.d("FloWaveAudioEngine", "Successfully retried playback with fresh stream resolution")
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("FloWaveAudioEngine", "Retry playback attempt failed: ${e.message}")
+                                        surfacePlaybackError(error, currentTrack)
+                                    }
+                                }
+                                return
                             }
-                            if (onlineRecoveryJob?.isActive == true) return
+
                             if (!networkAvailable) {
                                 wasPlayingBeforeDisconnect = true
                                 return
                             }
-                            val httpStatus = httpStatusCode(error)
-                            android.util.Log.w(
-                                "FloWaveAudioEngine",
-                                "Online playback failure for ${currentTrack.id}; HTTP status=$httpStatus, media3Code=${error.errorCode}"
-                            )
-                            if (!OnlinePlaybackPolicy.isRefreshableHttpStatus(httpStatus)) {
-                                trackRetryCount.remove(currentTrack.id)
-                                playNext()
-                                return
-                            }
-                            val retries = trackRetryCount.getOrDefault(currentTrack.id, 0)
-                            val currentPos = _playbackState.value.currentPositionMs
-                            if (retries < 3) {
-                                trackRetryCount[currentTrack.id] = retries + 1
-                                val delayMs = OnlinePlaybackPolicy.retryDelayMs(retries)
-                                android.util.Log.w("FloWaveAudioEngine", "Playback error for online track ${currentTrack.title} (retry ${retries + 1}/3). Delaying $delayMs ms then refreshing...")
-                                onlineRecoveryJob = scope.launch {
-                                    delay(delayMs)
-                                    try {
-                                        val sourceId = currentTrack.sourceId
-                                            ?: currentTrack.id.removePrefix("yt_")
-                                        // The user may have selected another item while the
-                                        // refresh was running. Never overwrite that newer state.
-                                        if (_playbackState.value.currentTrack?.id != currentTrack.id) {
-                                            return@launch
-                                        }
-                                        innerTubeRepo.invalidateStreamUrl(sourceId)
-                                        FloWaveCacheManager.invalidate(sourceId)
-                                        val curIndex = exoPlayer?.currentMediaItemIndex ?: 0
-                                        // Let a new error event schedule the next recovery attempt.
-                                        if (onlineRecoveryJob === kotlinx.coroutines.currentCoroutineContext()[Job]) {
-                                            onlineRecoveryJob = null
-                                        }
-                                        exoPlayer?.prepare()
-                                        exoPlayer?.seekTo(curIndex, currentPos)
-                                        exoPlayer?.play()
-                                        android.util.Log.d("FloWaveAudioEngine", "Invalidated online stream and resumed lazy resolution")
-                                        return@launch
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("FloWaveAudioEngine", "Failed to refresh expired URL mid-play: ${e.message}")
-                                        if (_playbackState.value.currentTrack?.id == currentTrack.id) playNext()
-                                    }
-                                }.also { job ->
-                                    job.invokeOnCompletion { if (onlineRecoveryJob === job) onlineRecoveryJob = null }
-                                }
-                            } else {
-                                android.util.Log.e("FloWaveAudioEngine", "Max retries reached for track ${currentTrack.title}. Skipping to next track.")
-                                trackRetryCount.remove(currentTrack.id)
-                                playNext()
-                            }
+
+                            surfacePlaybackError(error, currentTrack)
                         } else {
-                            // Local track error or fallback: skip to next
-                            val failedTrackId = failedTrack?.id
-                            scope.launch {
-                                delay(500)
-                                if (failedTrackId != null &&
-                                    _playbackState.value.currentTrack?.id == failedTrackId &&
-                                    _playbackState.value.currentTrack?.isOnline == false
-                                ) {
-                                    logger.debug("player", "local_error_skip", context = mapOf("trackId" to failedTrackId))
-                                    playNext()
-                                } else {
-                                    logger.debug("player", "local_error_skip_cancelled", context = mapOf("trackId" to failedTrackId))
-                                }
-                            }
+                            surfacePlaybackError(error, failedTrack)
                         }
                     }
 
@@ -540,6 +492,50 @@ class FloWaveAudioEngine(private val context: Context) {
 
         exoPlayer?.audioSessionId?.let { sessionId ->
             setupAudioEffects(sessionId)
+        }
+    }
+
+    private fun surfacePlaybackError(error: PlaybackException, failedTrack: Track?) {
+        android.util.Log.e("FloWaveAudioEngine", "Player error encountered: ${error.message}", error)
+        _playbackState.value = _playbackState.value.copy(
+            isBuffering = false,
+            errorMessage = error.localizedMessage ?: error.message ?: "Playback failed"
+        )
+
+        val now = System.currentTimeMillis()
+        if (now - lastErrorToastTime > 5000L) {
+            lastErrorToastTime = now
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(context, "Playback error: ${error.localizedMessage ?: error.message}", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+
+        if (failedTrack != null && failedTrack.isOnline) {
+            val sourceId = PlaybackIdentity.sourceId(failedTrack)
+            if (sourceId != null) {
+                innerTubeRepo.markUnplayableStream(
+                    sourceId,
+                    "media3_${error.errorCodeName.lowercase()}"
+                )
+                innerTubeRepo.invalidateStreamUrl(sourceId)
+                FloWaveCacheManager.invalidate(sourceId)
+            }
+            trackRetryCount.remove(failedTrack.id)
+            playNext()
+        } else {
+            val failedTrackId = failedTrack?.id
+            scope.launch {
+                delay(500)
+                if (failedTrackId != null &&
+                    _playbackState.value.currentTrack?.id == failedTrackId &&
+                    _playbackState.value.currentTrack?.isOnline == false
+                ) {
+                    logger.debug("player", "local_error_skip", context = mapOf("trackId" to failedTrackId))
+                    playNext()
+                } else {
+                    logger.debug("player", "local_error_skip_cancelled", context = mapOf("trackId" to failedTrackId))
+                }
+            }
         }
     }
 

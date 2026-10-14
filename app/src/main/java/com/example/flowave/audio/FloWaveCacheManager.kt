@@ -31,39 +31,44 @@ object FloWaveCacheManager {
         return cacheInstance ?: throw IllegalStateException("Cache failed to initialize")
     }
 
+    const val ANDROID_VR_USER_AGENT = "com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12; en_US; Quest 2; Build/SQ3A.220605.009.A1) gzip"
+
+    fun createDefaultHttpDataSourceFactory(
+        userAgent: String? = null,
+        requestHeaders: Map<String, String> = emptyMap()
+    ): androidx.media3.datasource.DefaultHttpDataSource.Factory {
+        val defaultHeaders = mutableMapOf(
+            "Origin" to "https://www.youtube.com",
+            "Referer" to "https://www.youtube.com/"
+        )
+        defaultHeaders.putAll(requestHeaders)
+
+        return androidx.media3.datasource.DefaultHttpDataSource.Factory()
+            .setUserAgent(userAgent ?: ANDROID_VR_USER_AGENT)
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(10000)
+            .setReadTimeoutMs(15000)
+            .setDefaultRequestProperties(defaultHeaders)
+    }
+
     /**
-     * Creates a CacheDataSource.Factory using OkHttpDataSource as the upstream
-     * HTTP source. This matches how InnerTune, ViMusic and other working
-     * YouTube Music clients configure their Media3 pipeline.
-     *
-     * OkHttpDataSource handles YouTube CDN responses (redirects, partial
-     * content, chunked transfer, connection reuse) more reliably than
-     * DefaultHttpDataSource which uses HttpURLConnection.
+     * Creates a CacheDataSource.Factory using DefaultHttpDataSource with ANDROID_VR
+     * client headers as the default upstream source, wrapped with DefaultDataSource
+     * to support local file/content schemes.
      */
     @Synchronized
-    fun createCacheDataSourceFactory(context: Context): CacheDataSource.Factory {
-        val streamClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .build()
-
-        val okHttpDataSourceFactory = OkHttpDataSource.Factory(streamClient).setUserAgent(com.example.flowave.utils.FloWaveConstants.USER_AGENT_ANDROID)
-            
-            
-            .setDefaultRequestProperties(
-                mapOf(
-                    "Referer" to "https://www.youtube.com/",
-                    "Origin" to "https://www.youtube.com"
-                )
-            )
-
-        val upstreamFactory = DefaultDataSource.Factory(context, okHttpDataSourceFactory)
+    fun createCacheDataSourceFactory(
+        context: Context,
+        upstreamFactory: androidx.media3.datasource.DataSource.Factory? = null
+    ): CacheDataSource.Factory {
+        val upstream = upstreamFactory ?: run {
+            val httpDataSourceFactory = createDefaultHttpDataSourceFactory()
+            DefaultDataSource.Factory(context, httpDataSourceFactory)
+        }
 
         return CacheDataSource.Factory()
             .setCache(getCache(context))
-            .setUpstreamDataSourceFactory(upstreamFactory)
+            .setUpstreamDataSourceFactory(upstream)
             .setCacheKeyFactory { dataSpec -> dataSpec.key ?: dataSpec.uri.toString() }
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
