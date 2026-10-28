@@ -394,9 +394,9 @@ fun LibraryScreen(
                                                 .background(DarkSurface),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            if (!track.albumArtUri.isNullOrBlank()) {
+                                            if (!track.artworkUri.isNullOrBlank()) {
                                                 AsyncImage(
-                                                    model = track.albumArtUri,
+                                                    model = track.artworkUri,
                                                     contentDescription = null,
                                                     contentScale = ContentScale.Crop,
                                                     modifier = Modifier.fillMaxSize()

@@ -297,7 +297,7 @@ fun YouTubeLoginScreen(
                 }
 
                 // Success Overlay Dialog (iOS Liquid Glass)
-                AnimatedVisibility(
+                androidx.compose.animation.AnimatedVisibility(
                     visible = connectedName != null,
                     enter = fadeIn(),
                     exit = fadeOut(),

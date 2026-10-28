@@ -286,9 +286,9 @@ fun HomeScreen(
                                         .background(Color(0x33FFFFFF)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (!track.albumArtUri.isNullOrBlank()) {
+                                    if (!track.artworkUri.isNullOrBlank()) {
                                         AsyncImage(
-                                            model = track.albumArtUri,
+                                            model = track.artworkUri,
                                             contentDescription = track.title,
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()
