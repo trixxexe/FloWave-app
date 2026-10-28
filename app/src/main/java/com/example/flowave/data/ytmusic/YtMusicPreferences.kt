@@ -119,6 +119,28 @@ class YtMusicPreferences private constructor(private val context: Context) {
         private fun escapeJson(str: String): String =
             str.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
 
+        private fun unescapeJson(str: String): String {
+            val sb = StringBuilder()
+            var i = 0
+            while (i < str.length) {
+                val c = str[i]
+                if (c == '\\' && i + 1 < str.length) {
+                    when (val next = str[i + 1]) {
+                        '"' -> { sb.append('"'); i += 2 }
+                        '\\' -> { sb.append('\\'); i += 2 }
+                        'n' -> { sb.append('\n'); i += 2 }
+                        'r' -> { sb.append('\r'); i += 2 }
+                        't' -> { sb.append('\t'); i += 2 }
+                        else -> { sb.append(next); i += 2 }
+                    }
+                } else {
+                    sb.append(c)
+                    i++
+                }
+            }
+            return sb.toString()
+        }
+
         fun encodeCookieMap(map: Map<String, String>): String {
             val sb = StringBuilder("{")
             var first = true
@@ -134,9 +156,11 @@ class YtMusicPreferences private constructor(private val context: Context) {
         fun decodeCookieMap(json: String): Map<String, String> {
             if (json.isBlank() || json == "{}") return emptyMap()
             val map = mutableMapOf<String, String>()
-            val pattern = Regex(""""([^"]+)"\s*:\s*"([^"]*)"""")
+            val pattern = Regex(""""((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"""")
             for (match in pattern.findAll(json)) {
-                map[match.groupValues[1]] = match.groupValues[2]
+                val k = unescapeJson(match.groupValues[1])
+                val v = unescapeJson(match.groupValues[2])
+                map[k] = v
             }
             return map
         }
