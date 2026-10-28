@@ -33,9 +33,10 @@ fun GlassCard(
     cornerRadius: Dp = 20.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val shape = remember(cornerRadius) { SquircleShape(cornerRadius) }
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(cornerRadius))
+            .clip(shape)
             .background(
                 brush = Brush.verticalGradient(
                     colors = listOf(
@@ -48,11 +49,43 @@ fun GlassCard(
                 width = 1.dp,
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0x44FFFFFF),
-                        Color(0x0BFFFFFF)
+                        Color(0x45FFFFFF),
+                        Color(0x0CFFFFFF)
                     )
                 ),
-                shape = RoundedCornerShape(cornerRadius)
+                shape = shape
+            ),
+        content = content
+    )
+}
+
+@Composable
+fun LiquidGlassCard(
+    modifier: Modifier = Modifier,
+    cornerRadius: Dp = 24.dp,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val shape = remember(cornerRadius) { SquircleShape(cornerRadius) }
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0x25FFFFFF),
+                        Color(0x0AFFFFFF)
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0x50FFFFFF),
+                        Color(0x0EFFFFFF)
+                    )
+                ),
+                shape = shape
             ),
         content = content
     )

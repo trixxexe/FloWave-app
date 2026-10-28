@@ -58,6 +58,8 @@ fun ProfileScreen(
     onClearUnsavedDiagnostics: () -> Unit = {},
     onClearAllDiagnostics: () -> Unit = {},
     onProtectDiagnostic: (String, Boolean) -> Unit = { _, _ -> },
+    onOpenLogin: () -> Unit = {},
+    onOpenEqualizer: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -110,6 +112,133 @@ fun ProfileScreen(
             Icon(Icons.Default.GraphicEq, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(24.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text("Settings & User Profile", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // In-App YouTube Music Google Account Card (iOS Liquid Glass)
+        val authManager = remember { com.example.flowave.data.ytmusic.YtMusicAuthManager.getInstance(context) }
+        val ytConnection by authManager.connection.collectAsState()
+
+        LiquidGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            cornerRadius = 24.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(SquircleShape(16.dp))
+                            .background(if (ytConnection.isConnected) CyanNeon.copy(alpha = 0.2f) else Color(0x22FFFFFF)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (ytConnection.isConnected && !ytConnection.photoUrl.isNullOrBlank()) {
+                            coil.compose.AsyncImage(
+                                model = ytConnection.photoUrl,
+                                contentDescription = null,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(
+                                if (ytConnection.isConnected) Icons.Default.AccountCircle else Icons.Default.CloudSync,
+                                contentDescription = null,
+                                tint = if (ytConnection.isConnected) CyanNeon else TextPrimary,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (ytConnection.isConnected) ytConnection.accountName else "YouTube Music",
+                                color = TextPrimary,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (ytConnection.isConnected) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = "Connected",
+                                    tint = CyanNeon,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = if (ytConnection.isConnected) {
+                                ytConnection.channelHandle ?: "Connected Account"
+                            } else {
+                                "Sign in to access your library & playlists"
+                            },
+                            color = TextMuted,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (ytConnection.isConnected) {
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    authManager.signOut()
+                                    Toast.makeText(context, "Signed out of YouTube Music", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            shape = SquircleShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Sign Out", color = Color(0xFFFF5252), fontSize = 13.sp)
+                        }
+                    } else {
+                        Button(
+                            onClick = onOpenLogin,
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanNeon, contentColor = PureBlack),
+                            shape = SquircleShape(14.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sign In with Google", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = onOpenEqualizer,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FFFFFF), contentColor = TextPrimary),
+                        shape = SquircleShape(14.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Equalizer, contentDescription = null, tint = CyanNeon, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("EQ DSP", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))

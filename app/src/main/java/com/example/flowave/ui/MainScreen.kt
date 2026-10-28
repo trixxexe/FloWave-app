@@ -120,7 +120,9 @@ fun MainScreen() {
         }
     }
 
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Home, 1: Explore, 2: Library, 3: Downloader, 4: EQ DSP, 5: Profile
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Home, 1: Explore, 2: Library, 3: Profile
+    var showLoginScreen by remember { mutableStateOf(false) }
+    var showEqualizerScreen by remember { mutableStateOf(false) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var isMiniPlayerDismissed by remember { mutableStateOf(false) }
     var editingTrack by remember { mutableStateOf<Track?>(null) }
@@ -129,6 +131,16 @@ fun MainScreen() {
     var lastPositionMs by remember { mutableLongStateOf(0L) }
     var accumulatedTimeMs by remember { mutableLongStateOf(0L) }
     var pendingDiagnosticExport by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        coroutineScope.launch {
+            try {
+                featuredOnlineTracks = innerTubeRepo.fetchHomeFeed()
+            } catch (_: Exception) {
+                featuredOnlineTracks = innerTubeRepo.getTrendingTracks()
+            }
+        }
+    }
 
     val playbackState by audioEngine.playbackState.collectAsStateWithLifecycle()
 
@@ -179,7 +191,11 @@ fun MainScreen() {
 
     // BackHandler: Single tap as redirector to previous page, Double tap on Home to exit app
     BackHandler(enabled = true) {
-        if (isPlayerExpanded) {
+        if (showLoginScreen) {
+            showLoginScreen = false
+        } else if (showEqualizerScreen) {
+            showEqualizerScreen = false
+        } else if (isPlayerExpanded) {
             isPlayerExpanded = false
         } else if (selectedTab != 0) {
             selectedTab = 0
@@ -329,7 +345,7 @@ fun MainScreen() {
         Scaffold(
             containerColor = Color.Transparent,
             topBar = {
-                if (!isPlayerExpanded && selectedTab != 4 && selectedTab != 5) {
+                if (!isPlayerExpanded && !showLoginScreen && !showEqualizerScreen && selectedTab != 3) {
                     Surface(
                         color = DarkSurface.copy(alpha = 0.95f),
                         contentColor = TextPrimary,
@@ -340,7 +356,7 @@ fun MainScreen() {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -348,81 +364,36 @@ fun MainScreen() {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(SquircleShape(10.dp))
                                     .clickable { selectedTab = 0 }
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(30.dp)
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .size(32.dp)
+                                        .clip(SquircleShape(10.dp))
                                         .background(Brush.linearGradient(listOf(CyanNeon, PurpleNeon))),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text("~", color = PureBlack, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                                    Text("~", color = PureBlack, fontWeight = FontWeight.Black, fontSize = 18.sp)
                                 }
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("FloWave", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("FloWave", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                             }
 
-                            // Center: The Mode Toggle Switch (CloudOff on left vs Cloud on right)
-                            val isOnline = selectedTab == 1 || selectedTab == 3
+                            // Right: App Tour & Profile Button
                             Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(DarkBackground)
-                                    .border(1.dp, GlassBorder, RoundedCornerShape(20.dp))
-                                    .padding(2.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = if (!isOnline) CyanNeon else Color.Transparent,
-                                    contentColor = if (!isOnline) PureBlack else TextMuted,
-                                    modifier = Modifier.clickable { if (isOnline) selectedTab = 0 }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.CloudOff,
-                                            contentDescription = "Offline Section",
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Offline", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = if (isOnline) CyanNeon else Color.Transparent,
-                                    contentColor = if (isOnline) PureBlack else TextMuted,
-                                    modifier = Modifier.clickable { if (!isOnline) selectedTab = 1 }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Cloud,
-                                            contentDescription = "Online Section",
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Online", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-
-                            // Right: Tour & Profile Icons
-                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
                                     onClick = {
                                         onboardingStep = 0
                                         showOnboardingDialog = true
                                     },
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(SquircleShape(12.dp))
+                                        .background(Color(0x22FFFFFF))
                                 ) {
                                     Icon(
                                         Icons.Default.HelpOutline,
@@ -432,14 +403,17 @@ fun MainScreen() {
                                     )
                                 }
                                 IconButton(
-                                    onClick = { selectedTab = 5 },
-                                    modifier = Modifier.size(32.dp)
+                                    onClick = { selectedTab = 3 },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(SquircleShape(12.dp))
+                                        .background(if (selectedTab == 3) CyanNeon.copy(alpha = 0.3f) else Color(0x22FFFFFF))
                                 ) {
                                     Icon(
-                                        Icons.Default.Settings,
-                                        contentDescription = "Settings & Developer",
-                                        tint = CyanNeon,
-                                        modifier = Modifier.size(18.dp)
+                                        Icons.Default.Person,
+                                        contentDescription = "Profile & YouTube Account",
+                                        tint = if (selectedTab == 3) CyanNeon else TextPrimary,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
@@ -448,11 +422,12 @@ fun MainScreen() {
                 }
             },
             bottomBar = {
-                if (!isPlayerExpanded) {
+                if (!isPlayerExpanded && !showLoginScreen && !showEqualizerScreen) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .navigationBarsPadding()
+                            .navigationBarsPadding(),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // Floating MiniPlayer above Bottom Navigation
                         if (playbackState.currentTrack != null && !isMiniPlayerDismissed) {
@@ -470,91 +445,76 @@ fun MainScreen() {
                                 onSeek = { pos -> audioEngine.seekTo(pos) },
                                 showProgress = SettingsSchema.getBoolean(settingsJson, "show_mini_player_progress")
                             )
+                            Spacer(modifier = Modifier.height(6.dp))
                         }
 
-                        // M3 Bottom Navigation Bar
-                        NavigationBar(
-                            containerColor = DarkSurface.copy(alpha = 0.95f),
-                            contentColor = CyanNeon,
-                            tonalElevation = 8.dp
+                        // Floating iOS Liquid Glass Capsule Dock
+                        val dockShape = remember { SquircleShape(28.dp) }
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 24.dp, vertical = 8.dp)
+                                .clip(dockShape)
+                                .background(
+                                    brush = Brush.verticalGradient(
+                                        listOf(
+                                            Color(0x331E1E2E),
+                                            Color(0x22121218)
+                                        )
+                                    )
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    brush = Brush.verticalGradient(
+                                        listOf(
+                                            Color(0x55FFFFFF),
+                                            Color(0x10FFFFFF)
+                                        )
+                                    ),
+                                    shape = dockShape
+                                )
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            NavigationBarItem(
-                                selected = selectedTab == 0,
-                                onClick = { selectedTab = 0 },
-                                icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
-                                label = { Text("Home", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = PureBlack,
-                                    selectedTextColor = CyanNeon,
-                                    indicatorColor = CyanNeon
-                                ),
-                                modifier = Modifier.testTag("nav_home_tab")
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceAround,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val navTabs = listOf(
+                                    Triple(0, Icons.Default.Home, "Home"),
+                                    Triple(1, Icons.Default.TravelExplore, "Explore"),
+                                    Triple(2, Icons.Default.LibraryMusic, "Library"),
+                                    Triple(3, Icons.Default.Person, "Profile")
+                                )
 
-                            NavigationBarItem(
-                                selected = selectedTab == 1,
-                                onClick = { selectedTab = 1 },
-                                icon = { Icon(Icons.Default.TravelExplore, contentDescription = "Explore") },
-                                label = { Text("Explore", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = PureBlack,
-                                    selectedTextColor = CyanNeon,
-                                    indicatorColor = CyanNeon
-                                ),
-                                modifier = Modifier.testTag("nav_explore_tab")
-                            )
-
-                            NavigationBarItem(
-                                selected = selectedTab == 2,
-                                onClick = { selectedTab = 2 },
-                                icon = { Icon(Icons.Default.LibraryMusic, contentDescription = "Library") },
-                                label = { Text("Library", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = PureBlack,
-                                    selectedTextColor = CyanNeon,
-                                    indicatorColor = CyanNeon
-                                ),
-                                modifier = Modifier.testTag("nav_library_tab")
-                            )
-
-                            NavigationBarItem(
-                                selected = selectedTab == 3,
-                                onClick = { selectedTab = 3 },
-                                icon = { Icon(Icons.Default.Download, contentDescription = "Downloader") },
-                                label = { Text("Downloader", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = PureBlack,
-                                    selectedTextColor = CyanNeon,
-                                    indicatorColor = CyanNeon
-                                ),
-                                modifier = Modifier.testTag("nav_downloader_tab")
-                            )
-
-                            NavigationBarItem(
-                                selected = selectedTab == 4,
-                                onClick = { selectedTab = 4 },
-                                icon = { Icon(Icons.Default.Equalizer, contentDescription = "Equalizer") },
-                                label = { Text("EQ DSP", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = PureBlack,
-                                    selectedTextColor = CyanNeon,
-                                    indicatorColor = CyanNeon
-                                ),
-                                modifier = Modifier.testTag("nav_eq_tab")
-                            )
-
-                            NavigationBarItem(
-                                selected = selectedTab == 5,
-                                onClick = { selectedTab = 5 },
-                                icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
-                                label = { Text("Profile", fontSize = 10.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = PureBlack,
-                                    selectedTextColor = CyanNeon,
-                                    indicatorColor = CyanNeon
-                                ),
-                                modifier = Modifier.testTag("nav_profile_tab")
-                            )
+                                navTabs.forEach { (index, icon, label) ->
+                                    val isSelected = selectedTab == index
+                                    val interaction = remember { MutableInteractionSource() }
+                                    Column(
+                                        modifier = Modifier
+                                            .expressivePressScale(interaction)
+                                            .clip(SquircleShape(16.dp))
+                                            .clickable(interactionSource = interaction, indication = null) {
+                                                selectedTab = index
+                                            }
+                                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = label,
+                                            tint = if (isSelected) CyanNeon else TextMuted,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = label,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) CyanNeon else TextMuted
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -565,236 +525,172 @@ fun MainScreen() {
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                when (selectedTab) {
-                    0 -> HomeScreen(
-                        tracks = offlineTracks,
-                        featuredOnline = featuredOnlineTracks,
-                        totalListeningTimeMs = totalTimeMs ?: 0L,
-                        totalPlayCount = totalPlayCount,
-                        onTrackClick = { track -> audioEngine.playTrack(track) },
-                        onOnlineTrackClick = { online ->
-                            coroutineScope.launch {
-                                playOnlineTrack(online, context, audioEngine)
-                            }
-                        },
-                        onProfileClick = { selectedTab = 5 },
-                        onDownloaderClick = { selectedTab = 3 },
-                        onScanClick = {
-                            coroutineScope.launch {
-                                repository.scanMediaStore()
-                                Toast.makeText(context, "Device library refreshed", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        onExploreOnlineClick = { selectedTab = 1 },
-                        onPlayQueue = { queue, index -> audioEngine.setQueueAndPlay(queue, index) },
-                        settingsJson = settingsJson
+                if (showLoginScreen) {
+                    YouTubeLoginScreen(
+                        onBack = { showLoginScreen = false },
+                        onConnected = { showLoginScreen = false }
                     )
-
-                    1 -> ExploreScreen(
-                        innerTubeRepo = innerTubeRepo,
+                } else if (showEqualizerScreen) {
+                    EqualizerScreen(
                         audioEngine = audioEngine,
-                        onDownloadTrack = { online ->
-                            coroutineScope.launch {
-                                try {
-                                    Toast.makeText(context, "Extracting audio: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    downloader.startDownload(online)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Download error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
+                        onBackClick = { showEqualizerScreen = false }
                     )
-
-                    2 -> LibraryScreen(
-                        localTracks = offlineTracks,
-                        searchOnlineResults = searchOnlineResults,
-                        onTrackClick = { track -> audioEngine.playTrack(track) },
-                        onOnlineTrackClick = { online ->
-                            coroutineScope.launch {
-                                playOnlineTrack(online, context, audioEngine)
-                            }
-                        },
-                        onDownloadOnlineTrack = { online ->
-                            coroutineScope.launch {
-                                try {
-                                    Toast.makeText(context, "Starting download: ${online.title}", Toast.LENGTH_SHORT).show()
-                                    downloader.startDownload(online)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onScanStorageClick = {
-                            coroutineScope.launch {
-                                repository.scanMediaStore()
-                                Toast.makeText(context, "Scanned storage for audio tracks", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        onImportFilesClick = {
-                            importAudioLauncher.launch(arrayOf("audio/*"))
-                        },
-                        onImportFolderClick = {
-                            importFolderLauncher.launch(null)
-                        },
-                        onSearchQueryChange = { query ->
-                            if (query.isNotEmpty()) {
+                } else {
+                    when (selectedTab) {
+                        0 -> HomeScreen(
+                            tracks = offlineTracks,
+                            featuredOnline = featuredOnlineTracks,
+                            totalListeningTimeMs = totalTimeMs ?: 0L,
+                            totalPlayCount = totalPlayCount,
+                            onTrackClick = { track -> audioEngine.playTrack(track) },
+                            onOnlineTrackClick = { online ->
                                 coroutineScope.launch {
-                                    try {
-                                        searchOnlineResults = innerTubeRepo.searchTracks(query)
-                                    } catch (e: Exception) {
-                                        searchOnlineResults = emptyList()
+                                    playOnlineTrack(online, context, audioEngine)
+                                }
+                            },
+                            onProfileClick = { selectedTab = 3 },
+                            onDownloaderClick = { selectedTab = 1 },
+                            onScanClick = {
+                                coroutineScope.launch {
+                                    repository.scanMediaStore()
+                                    Toast.makeText(context, "Device library refreshed", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onExploreOnlineClick = { selectedTab = 1 },
+                            onPlayQueue = { queue, index -> audioEngine.setQueueAndPlay(queue, index) },
+                            settingsJson = settingsJson
+                        )
+
+                        1 -> ExploreScreen(
+                            innerTubeRepo = innerTubeRepo,
+                            audioEngine = audioEngine,
+                            onDownloadTrack = { online ->
+                                coroutineScope.launch {
+                                    playOnlineTrack(online, context, audioEngine)
+                                }
+                            }
+                        )
+
+                        2 -> LibraryScreen(
+                            localTracks = offlineTracks,
+                            searchOnlineResults = searchOnlineResults,
+                            onTrackClick = { track -> audioEngine.playTrack(track) },
+                            onOnlineTrackClick = { online ->
+                                coroutineScope.launch {
+                                    playOnlineTrack(online, context, audioEngine)
+                                }
+                            },
+                            onDownloadOnlineTrack = { online ->
+                                coroutineScope.launch {
+                                    playOnlineTrack(online, context, audioEngine)
+                                }
+                            },
+                            onScanStorageClick = {
+                                coroutineScope.launch {
+                                    repository.scanMediaStore()
+                                    Toast.makeText(context, "Scanned storage for audio tracks", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onImportFilesClick = {
+                                importAudioLauncher.launch(arrayOf("audio/*"))
+                            },
+                            onImportFolderClick = {
+                                importFolderLauncher.launch(null)
+                            },
+                            onSearchQueryChange = { query ->
+                                if (query.isNotEmpty()) {
+                                    coroutineScope.launch {
+                                        try {
+                                            searchOnlineResults = innerTubeRepo.searchTracks(query)
+                                        } catch (e: Exception) {
+                                            searchOnlineResults = emptyList()
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        onEditTagClick = { track -> editingTrack = track },
-                        onPlayQueue = { queue, idx -> audioEngine.setQueueAndPlay(queue, idx) },
-                        onAddToQueueNext = { track -> audioEngine.addToQueueNext(track) },
-                        onAddToQueueLast = { track -> audioEngine.addToQueueLast(track) },
-                        onToggleFavoriteClick = { track ->
-                            coroutineScope.launch {
-                                repository.toggleFavorite(track)
-                                Toast.makeText(context, "Favorite updated", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        recentlyPlayedTracks = recentlyPlayedTracks,
-                        playlists = playlists,
-                        onCreatePlaylist = { name ->
-                            coroutineScope.launch { repository.createPlaylist(name) }
-                        },
-                        onPlayPlaylist = { playlist ->
-                            coroutineScope.launch {
-                                val tracks = repository.getTracksForPlaylist(playlist.id).first()
-                                if (tracks.isNotEmpty()) audioEngine.setQueueAndPlay(tracks, 0)
-                                else Toast.makeText(context, "This playlist is empty", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    )
-
-                    3 -> DownloaderScreen(
-                        downloadEntries = downloadEntries,
-                        searchResults = downloaderSearchResults,
-                        isSearching = isDownloaderSearching,
-                        searchError = downloaderSearchError,
-                        onSearchKeyword = { keyword ->
-                            downloaderSearchJob?.cancel()
-                            if (keyword.isNotBlank()) {
-                                downloaderSearchJob = coroutineScope.launch {
-                                    isDownloaderSearching = true
-                                    downloaderSearchError = null
-                                    downloaderSearchResults = try {
-                                        val result = downloader.inspect(keyword.trim())
-                                        result.exceptionOrNull()?.let { error ->
-                                            downloaderSearchError = error.message ?: "Search failed"
-                                            Toast.makeText(context, "Search failed: ${error.message ?: "yt-dlp unavailable"}", Toast.LENGTH_LONG).show()
-                                        }
-                                        result.getOrDefault(emptyList()).map { info ->
-                                            InnerTubeTrack(
-                                                id = info.id ?: info.webpageUrl,
-                                                title = info.title,
-                                                artist = info.creator.ifBlank { "Unknown artist" },
-                                                durationText = info.durationSeconds?.let { seconds ->
-                                                    "%d:%02d".format(seconds / 60L, seconds % 60L)
-                                                } ?: "--:--",
-                                                thumbnailUrl = info.thumbnailUrl.orEmpty()
-                                            )
-                                        }
-                                    } catch (e: Exception) {
-                                        downloaderSearchError = e.message ?: "Search failed"
-                                        android.util.Log.e("MainScreen", "Downloader search failed: ${e.message}")
-                                        emptyList()
-                                    } finally {
-                                        isDownloaderSearching = false
-                                    }
+                            },
+                            onEditTagClick = { track -> editingTrack = track },
+                            onPlayQueue = { queue, idx -> audioEngine.setQueueAndPlay(queue, idx) },
+                            onAddToQueueNext = { track -> audioEngine.addToQueueNext(track) },
+                            onAddToQueueLast = { track -> audioEngine.addToQueueLast(track) },
+                            onToggleFavoriteClick = { track ->
+                                coroutineScope.launch {
+                                    repository.toggleFavorite(track)
+                                    Toast.makeText(context, "Favorite updated", Toast.LENGTH_SHORT).show()
                                 }
-                            } else {
-                                downloaderSearchResults = emptyList()
-                                downloaderSearchError = null
-                            }
-                        },
-                        onDownloadTrack = { track ->
-                            coroutineScope.launch { downloader.startDownload(track) }
-                        },
-                        onStartUrlDownload = { url ->
-                            coroutineScope.launch {
-                                val info = downloader.inspect(url).getOrNull()?.firstOrNull()
-                                val targetUrl = info?.webpageUrl ?: url
-                                val intent = android.content.Intent(context, FloWaveDownloadService::class.java).apply {
-                                    putExtra(FloWaveDownloadService.EXTRA_URL, targetUrl)
-                                    putExtra(FloWaveDownloadService.EXTRA_TITLE, info?.title ?: targetUrl)
-                                    putExtra(FloWaveDownloadService.EXTRA_ARTIST, info?.creator ?: "Online download")
-                                    putExtra(FloWaveDownloadService.EXTRA_THUMBNAIL, info?.thumbnailUrl)
+                            },
+                            recentlyPlayedTracks = recentlyPlayedTracks,
+                            playlists = playlists,
+                            onCreatePlaylist = { name ->
+                                coroutineScope.launch { repository.createPlaylist(name) }
+                            },
+                            onPlayPlaylist = { playlist ->
+                                coroutineScope.launch {
+                                    val tracks = repository.getTracksForPlaylist(playlist.id).first()
+                                    if (tracks.isNotEmpty()) audioEngine.setQueueAndPlay(tracks, 0)
+                                    else Toast.makeText(context, "This playlist is empty", Toast.LENGTH_SHORT).show()
                                 }
-                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                    context.startForegroundService(intent)
-                                } else {
-                                    context.startService(intent)
+                            },
+                            onOpenLogin = { showLoginScreen = true }
+                        )
+
+                        3 -> ProfileScreen(
+                            userProfile = userProfile,
+                            totalListeningTimeMs = totalTimeMs ?: 0L,
+                            totalPlayCount = totalPlayCount,
+                            onBackClick = { selectedTab = 0 },
+                            onSaveProfile = { name, bio ->
+                                coroutineScope.launch {
+                                    profileRepo.updateUsername(name)
+                                    profileRepo.updateBio(bio)
                                 }
-                            }
-                        },
-                        onBackClick = { selectedTab = 0 }
-                    )
-
-                    4 -> EqualizerScreen(
-                        audioEngine = audioEngine,
-                        onBackClick = { selectedTab = 0 }
-                    )
-
-                     5 -> ProfileScreen(
-                        userProfile = userProfile,
-                        totalListeningTimeMs = totalTimeMs ?: 0L,
-                        totalPlayCount = totalPlayCount,
-                        onBackClick = { selectedTab = 0 },
-                        onSaveProfile = { name, bio ->
-                            coroutineScope.launch {
-                                profileRepo.updateUsername(name)
-                                profileRepo.updateBio(bio)
-                            }
-                        },
-                        onQualitySelected = { quality ->
-                            coroutineScope.launch {
-                                profileRepo.updateStreamingQuality(quality)
-                            }
-                        },
-                        onBackgroundPresetSelected = { preset ->
-                            coroutineScope.launch {
-                                profileRepo.updateBackgroundPreset(preset)
-                            }
-                        },
-                        onCustomBgUrlEntered = { url ->
-                            coroutineScope.launch {
-                                profileRepo.updateCustomBgUrl(url)
-                            }
-                        },
-                        onAudioSettingsChanged = { norm, gapless ->
-                            coroutineScope.launch {
-                                profileRepo.updateAudioSettings(norm, gapless)
-                                Toast.makeText(context, "Audio engine DSP settings saved", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        settingsJson = settingsJson,
-                        onSettingUpdated = { key, value ->
-                            coroutineScope.launch {
-                                profileRepo.updateSetting(key, value)
-                            }
-                        },
-                        onExportSettings = {
-                            profileRepo.exportSettings()
-                        },
-                        onImportSettings = { jsonStr ->
-                            profileRepo.importSettings(jsonStr)
-                        },
-                        diagnosticEntries = diagnosticEntries,
-                        onExportDiagnostics = {
-                            coroutineScope.launch {
-                                pendingDiagnosticExport = diagnostics.exportText()
-                                diagnosticExportLauncher.launch("flowave-diagnostics-${System.currentTimeMillis()}.txt")
-                            }
-                        },
-                        onClearUnsavedDiagnostics = { diagnostics.clearUnsaved() },
-                        onClearAllDiagnostics = { diagnostics.clearAll() },
-                        onProtectDiagnostic = { id, protect -> diagnostics.protect(id, protect) }
-                    )
+                            },
+                            onQualitySelected = { quality ->
+                                coroutineScope.launch {
+                                    profileRepo.updateStreamingQuality(quality)
+                                }
+                            },
+                            onBackgroundPresetSelected = { preset ->
+                                coroutineScope.launch {
+                                    profileRepo.updateBackgroundPreset(preset)
+                                }
+                            },
+                            onCustomBgUrlEntered = { url ->
+                                coroutineScope.launch {
+                                    profileRepo.updateCustomBgUrl(url)
+                                }
+                            },
+                            onAudioSettingsChanged = { norm, gapless ->
+                                coroutineScope.launch {
+                                    profileRepo.updateAudioSettings(norm, gapless)
+                                    Toast.makeText(context, "Audio engine DSP settings saved", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            settingsJson = settingsJson,
+                            onSettingUpdated = { key, value ->
+                                coroutineScope.launch {
+                                    profileRepo.updateSetting(key, value)
+                                }
+                            },
+                            onExportSettings = {
+                                profileRepo.exportSettings()
+                            },
+                            onImportSettings = { jsonStr ->
+                                profileRepo.importSettings(jsonStr)
+                            },
+                            diagnosticEntries = diagnosticEntries,
+                            onExportDiagnostics = {
+                                coroutineScope.launch {
+                                    pendingDiagnosticExport = diagnostics.exportText()
+                                    diagnosticExportLauncher.launch("flowave-diagnostics-${System.currentTimeMillis()}.txt")
+                                }
+                            },
+                            onClearUnsavedDiagnostics = { diagnostics.clearUnsaved() },
+                            onClearAllDiagnostics = { diagnostics.clearAll() },
+                            onProtectDiagnostic = { id, protect -> diagnostics.protect(id, protect) },
+                            onOpenLogin = { showLoginScreen = true },
+                            onOpenEqualizer = { showEqualizerScreen = true }
+                        )
+                    }
                 }
             }
         }
@@ -812,7 +708,7 @@ fun MainScreen() {
                 onCloseClick = { isPlayerExpanded = false },
                 onOpenEqualizerClick = {
                     isPlayerExpanded = false
-                    selectedTab = 4
+                    showEqualizerScreen = true
                 }
             )
         }

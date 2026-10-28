@@ -3,11 +3,13 @@ package com.example.flowave.data.remote
 import android.content.Context
 import com.example.flowave.FloWaveRuntime
 import com.example.flowave.FloWaveApplication
-import com.example.flowave.downloader.SealStyleDownloadEngine
-import com.example.flowave.downloader.YtDlpBinaryValidator
 import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.Track
 import com.example.flowave.data.model.LrcLine
+import com.example.flowave.data.ytmusic.YtAccountInfo
+import com.example.flowave.data.ytmusic.YtConnection
+import com.example.flowave.data.ytmusic.YtMusicAuthManager
+import com.example.flowave.data.ytmusic.YtPlaylistSummary
 import com.example.flowave.utils.FloWaveConstants
 import com.example.flowave.utils.YouTubeDecipherer
 import com.example.flowave.diagnostics.FloWaveLogger
@@ -118,7 +120,7 @@ object InnerTubeClients {
 open class InnerTubeRepository(context: Context? = null) {
     private val appContext = context?.applicationContext ?: FloWaveApplication.appContext
     private val logger = appContext?.let { FloWaveLogger.getInstance(it) }
-    private val localStreamResolver = SealStyleDownloadEngine(appContext)
+    private val authManager = appContext?.let { YtMusicAuthManager.getInstance(it) }
     private val poTokenGenerator = appContext?.let { com.example.flowave.data.remote.botguard.PoTokenGenerator(it) }
     private val client = OkHttpClient.Builder()
         .connectTimeout(FloWaveConstants.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -374,13 +376,25 @@ open class InnerTubeRepository(context: Context? = null) {
                 put("params", "EgWKAQIIAWoKEAkQBRAKEAMQBBAK") // Filter for Songs
             }
 
-            val request = Request.Builder()
+            val reqBuilder = Request.Builder()
                 .url(FloWaveConstants.INNERTUBE_SEARCH_URL)
                 .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
                 .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
                 .header("Origin", "https://music.youtube.com")
                 .header("Referer", "https://music.youtube.com/")
-                .build()
+
+            authManager?.let { auth ->
+                if (auth.connection.value.isConnected) {
+                    auth.cookieHeaderValue()?.let {
+                        reqBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+                    }
+                    auth.authorizationHeaderValue()?.let {
+                        reqBuilder.header("Authorization", it)
+                    }
+                }
+            }
+
+            val request = reqBuilder.build()
 
             executeWithRetry(request, maxRetries = 2).use { response ->
                 val bodyString = response.body?.string() ?: ""
@@ -434,30 +448,6 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         } catch (e: Exception) {
             android.util.Log.e("InnerTubeRepository", "YouTube Scraper failed: ${e.message}", e)
-        }
-
-        if (tracks.isNotEmpty()) return@withContext tracks
-
-        // ENGINE 2: Embedded yt-dlp search fallback (On-device fallback)
-        if (YtDlpBinaryValidator.isRuntimeAvailable(appContext) && FloWaveRuntime.awaitReady(2_000L)) {
-            try {
-                val ytDlpResults = localStreamResolver.inspect("ytsearch15:$query", allowFallbackToNative = false).getOrNull()
-                if (!ytDlpResults.isNullOrEmpty()) {
-                    val mapped = ytDlpResults.mapNotNull { item ->
-                        val id = item.id ?: item.webpageUrl.substringAfter("v=").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                        InnerTubeTrack(
-                            id = id,
-                            title = item.title,
-                            artist = item.creator.ifBlank { "YouTube" },
-                            durationText = item.durationSeconds?.let { "%d:%02d".format(it / 60, it % 60) } ?: "3:30",
-                            thumbnailUrl = item.thumbnailUrl ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"
-                        )
-                    }
-                    tracks.addAll(mapped)
-                }
-            } catch (e: Exception) {
-                logger?.warn("online", "ytdlp_search_failed", context = mapOf("query" to query), throwable = e)
-            }
         }
 
         tracks
@@ -764,34 +754,72 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        // 2. Embedded yt-dlp resolver (Safe, on-device, handles BotGuard & signature challenges)
-        if (FloWaveRuntime.ready || FloWaveRuntime.awaitReady(2_000L)) {
-            val result = localStreamResolver.resolveAudioUrl("https://www.youtube.com/watch?v=$videoId", allowFallbackToNative = false)
-            result.onSuccess { resolved ->
-                logger?.info("online", "embedded_resolver_succeeded", context = mapOf("videoId" to videoId))
-                val resolvedSource = ResolvedStreamSource(
-                    url = resolved,
-                    resolver = "embedded",
-                    candidateKey = "yt_dlp",
-                    userAgent = FloWaveConstants.USER_AGENT_DESKTOP,
-                    requestHeaders = mapOf("User-Agent" to FloWaveConstants.USER_AGENT_DESKTOP)
-                )
-                streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
-                streamUrlCache[videoId] = Pair(System.currentTimeMillis(), resolved)
-                return@withContext resolvedSource
-            }.onFailure { error ->
-                logger?.warn("online", "resolver_attempt_failed", context = mapOf(
-                    "videoId" to videoId,
-                    "resolver" to "embedded",
-                    "attempt" to 1,
-                    "failureClass" to OnlinePlaybackPolicy.classifyResolverFailure(error)
-                ), throwable = error)
+        // 2. Pure-Kotlin WEB_REMIX with signature deciphering fallback
+        try {
+            val webConfig = InnerTubeClients.WEB_REMIX
+            val clientJson = JSONObject().apply {
+                put("clientName", webConfig.clientName)
+                put("clientVersion", webConfig.clientVersion)
+                put("hl", "en")
+                put("gl", "US")
+                if (!visitorData.isNullOrBlank()) {
+                    put("visitorData", visitorData)
+                }
             }
-        } else {
-            logger?.warn("online", "embedded_resolver_skipped", context = mapOf(
-                "videoId" to videoId,
-                "reason" to "optional_runtime_unavailable"
-            ))
+            val requestBodyJson = JSONObject().apply {
+                put("context", JSONObject().apply {
+                    put("client", clientJson)
+                })
+                put("videoId", videoId)
+                put("contentCheckOk", true)
+                put("racyCheckOk", true)
+            }
+            val reqBuilder = Request.Builder()
+                .url("https://music.youtube.com/youtubei/v1/player?prettyPrint=false")
+                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
+                .header("User-Agent", webConfig.userAgent)
+                .header("Content-Type", "application/json")
+                .header("Origin", "https://music.youtube.com")
+                .header("Referer", "https://music.youtube.com/")
+                .header("X-YouTube-Client-Name", "67")
+                .header("X-YouTube-Client-Version", webConfig.clientVersion)
+
+            authManager?.let { auth ->
+                if (auth.connection.value.isConnected) {
+                    auth.cookieHeaderValue()?.let {
+                        reqBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+                    }
+                    auth.authorizationHeaderValue()?.let {
+                        reqBuilder.header("Authorization", it)
+                    }
+                }
+            }
+
+            executeWithRetry(reqBuilder.build(), maxRetries = 1).use { resp ->
+                val bodyStr = resp.body?.string().orEmpty()
+                if (resp.isSuccessful && bodyStr.isNotEmpty()) {
+                    val json = JSONObject(bodyStr)
+                    val extractedUrl = InnerTubeParser.parsePlayerResponse(json, client)
+                    if (!extractedUrl.isNullOrBlank()) {
+                        val resolvedSource = ResolvedStreamSource(
+                            url = extractedUrl,
+                            resolver = "inner_tube_remix",
+                            candidateKey = "WEB_REMIX",
+                            userAgent = webConfig.userAgent,
+                            requestHeaders = mapOf(
+                                "User-Agent" to webConfig.userAgent,
+                                "Origin" to "https://music.youtube.com",
+                                "Referer" to "https://music.youtube.com/"
+                            )
+                        )
+                        streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
+                        streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
+                        return@withContext resolvedSource
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logger?.warn("online", "web_remix_fallback_failed", context = mapOf("videoId" to videoId), throwable = e)
         }
 
         throw java.io.IOException("All extraction attempts and fallback clients were exhausted for videoId: $videoId")
@@ -1004,6 +1032,349 @@ open class InnerTubeRepository(context: Context? = null) {
         } catch (e: Exception) {
             android.util.Log.e("InnerTubeRepository", "Proactive key scraping failed: ${e.message}")
         }
+    }
+
+    /** Identity of the signed-in account (account_menu endpoint). */
+    suspend fun fetchAccountInfo(): YtAccountInfo? = withContext(Dispatchers.IO) {
+        val auth = authManager ?: return@withContext null
+        if (!auth.connection.value.isConnected) return@withContext null
+
+        val url = "https://music.youtube.com/youtubei/v1/account/account_menu?prettyPrint=false"
+        val contextJson = JSONObject().apply {
+            put("client", JSONObject().apply {
+                put("clientName", "WEB_REMIX")
+                put("clientVersion", "1.20260707.12.00")
+                put("hl", "en")
+                put("gl", "US")
+            })
+        }
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
+        }
+
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(jsonMediaType))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+            .header("Origin", "https://music.youtube.com")
+            .header("Referer", "https://music.youtube.com/")
+            .header("X-YouTube-Client-Name", "67")
+            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+
+        auth.cookieHeaderValue()?.let {
+            requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+        }
+        auth.authorizationHeaderValue()?.let {
+            requestBuilder.header("Authorization", it)
+        }
+
+        try {
+            val response = client.newCall(requestBuilder.build()).execute()
+            if (!response.isSuccessful) {
+                // Auto-refresh cookies on 401/403
+                if ((response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
+                    return@withContext fetchAccountInfo()
+                }
+                return@withContext null
+            }
+            val responseBody = response.body?.string() ?: return@withContext null
+            val root = JSONObject(responseBody)
+            val header = findObjectRecursively(root, "activeAccountHeaderRenderer") ?: return@withContext null
+            val accountName = header.optJSONObject("accountName")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.trim().orEmpty()
+            val handle = header.optJSONObject("channelHandle")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.trim()
+            val photoUrl = header.optJSONObject("accountPhoto")?.optJSONObject("thumbnails")?.optJSONArray("thumbnails")?.let { thumbs ->
+                thumbs.optJSONObject(thumbs.length() - 1)?.optString("url")
+            }
+            if (accountName.isNotBlank()) {
+                YtAccountInfo(accountName, handle, photoUrl)
+            } else null
+        } catch (e: Exception) {
+            logger?.warn("online", "fetch_account_info_failed", throwable = e)
+            null
+        }
+    }
+
+    /** The account's library playlists (FEmusic_liked_playlists) with synthesized Liked Music head entry. */
+    suspend fun fetchLibraryPlaylists(): List<YtPlaylistSummary> = withContext(Dispatchers.IO) {
+        val auth = authManager ?: return@withContext emptyList()
+        val results = mutableListOf<YtPlaylistSummary>()
+
+        // Always provide Liked Music as primary head entry
+        results.add(
+            YtPlaylistSummary(
+                id = "VLLM",
+                title = "Liked Music",
+                author = "YouTube Music",
+                trackCountText = null,
+                artworkUrl = "https://music.youtube.com/img/on_platform_logo.png"
+            )
+        )
+
+        if (!auth.connection.value.isConnected) return@withContext results
+
+        val url = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false"
+        val contextJson = JSONObject().apply {
+            put("client", JSONObject().apply {
+                put("clientName", "WEB_REMIX")
+                put("clientVersion", "1.20260707.12.00")
+                put("hl", "en")
+                put("gl", "US")
+            })
+        }
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
+            put("browseId", "FEmusic_liked_playlists")
+        }
+
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(jsonMediaType))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+            .header("Origin", "https://music.youtube.com")
+            .header("Referer", "https://music.youtube.com/")
+            .header("X-YouTube-Client-Name", "67")
+            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+
+        auth.cookieHeaderValue()?.let {
+            requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+        }
+        auth.authorizationHeaderValue()?.let {
+            requestBuilder.header("Authorization", it)
+        }
+
+        try {
+            val response = client.newCall(requestBuilder.build()).execute()
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string().orEmpty()
+                if (responseBody.isNotEmpty()) {
+                    val root = JSONObject(responseBody)
+                    parsePlaylistsRecursively(root, results)
+                }
+            } else if ((response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
+                return@withContext fetchLibraryPlaylists()
+            }
+        } catch (e: Exception) {
+            logger?.warn("online", "fetch_library_playlists_failed", throwable = e)
+        }
+        results.distinctBy { it.id }
+    }
+
+    /** Fetches tracks belonging to a YouTube Music playlist or album (browse endpoint). */
+    suspend fun fetchPlaylistTracks(browseId: String): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
+        val auth = authManager
+        val url = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false"
+        val contextJson = JSONObject().apply {
+            put("client", JSONObject().apply {
+                put("clientName", "WEB_REMIX")
+                put("clientVersion", "1.20260707.12.00")
+                put("hl", "en")
+                put("gl", "US")
+            })
+        }
+        val targetBrowseId = if (browseId == "LM" || browseId == "FEmusic_liked_videos") "VLLM" else browseId
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
+            put("browseId", targetBrowseId)
+        }
+
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(jsonMediaType))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+            .header("Origin", "https://music.youtube.com")
+            .header("Referer", "https://music.youtube.com/")
+            .header("X-YouTube-Client-Name", "67")
+            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+
+        auth?.let { a ->
+            if (a.connection.value.isConnected) {
+                a.cookieHeaderValue()?.let {
+                    requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+                }
+                a.authorizationHeaderValue()?.let {
+                    requestBuilder.header("Authorization", it)
+                }
+            }
+        }
+
+        try {
+            val response = client.newCall(requestBuilder.build()).execute()
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string().orEmpty()
+                if (responseBody.isNotEmpty()) {
+                    val root = JSONObject(responseBody)
+                    val tracks = parseTracksFromBrowse(root)
+                    if (tracks.isNotEmpty()) return@withContext tracks
+                }
+            } else if (auth != null && (response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
+                return@withContext fetchPlaylistTracks(browseId)
+            }
+        } catch (e: Exception) {
+            logger?.warn("online", "fetch_playlist_tracks_failed", context = mapOf("browseId" to browseId), throwable = e)
+        }
+
+        emptyList()
+    }
+
+    /** Fetches user's Liked Music tracks (VLLM endpoint). */
+    suspend fun fetchLikedMusic(): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
+        fetchPlaylistTracks("VLLM")
+    }
+
+    /** Fetches online recommendations and personalized home feed (FEmusic_home). */
+    suspend fun fetchHomeFeed(): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
+        val auth = authManager
+        val url = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false"
+        val contextJson = JSONObject().apply {
+            put("client", JSONObject().apply {
+                put("clientName", "WEB_REMIX")
+                put("clientVersion", "1.20260707.12.00")
+                put("hl", "en")
+                put("gl", "US")
+            })
+        }
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
+            put("browseId", "FEmusic_home")
+        }
+
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(bodyJson.toString().toRequestBody(jsonMediaType))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+            .header("Origin", "https://music.youtube.com")
+            .header("Referer", "https://music.youtube.com/")
+            .header("X-YouTube-Client-Name", "67")
+            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+
+        auth?.let { a ->
+            if (a.connection.value.isConnected) {
+                a.cookieHeaderValue()?.let {
+                    requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+                }
+                a.authorizationHeaderValue()?.let {
+                    requestBuilder.header("Authorization", it)
+                }
+            }
+        }
+
+        try {
+            val response = client.newCall(requestBuilder.build()).execute()
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string().orEmpty()
+                if (responseBody.isNotEmpty()) {
+                    val root = JSONObject(responseBody)
+                    val tracks = parseTracksFromBrowse(root)
+                    if (tracks.isNotEmpty()) return@withContext tracks
+                }
+            }
+        } catch (e: Exception) {
+            logger?.warn("online", "fetch_home_feed_failed", throwable = e)
+        }
+
+        // Fallback to trending search
+        getTrendingTracks()
+    }
+
+    private fun findObjectRecursively(json: Any, targetKey: String): JSONObject? {
+        when (json) {
+            is JSONObject -> {
+                if (json.has(targetKey)) {
+                    val found = json.optJSONObject(targetKey)
+                    if (found != null) return found
+                }
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val candidate = findObjectRecursively(json.get(key), targetKey)
+                    if (candidate != null) return candidate
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until json.length()) {
+                    val item = json.opt(i)
+                    if (item != null) {
+                        val candidate = findObjectRecursively(item, targetKey)
+                        if (candidate != null) return candidate
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun collectObjectsRecursively(json: Any, targetKey: String, results: MutableList<JSONObject>) {
+        when (json) {
+            is JSONObject -> {
+                if (json.has(targetKey)) {
+                    json.optJSONObject(targetKey)?.let { results.add(it) }
+                }
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    collectObjectsRecursively(json.get(key), targetKey, results)
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until json.length()) {
+                    val item = json.opt(i)
+                    if (item != null) {
+                        collectObjectsRecursively(item, targetKey, results)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parsePlaylistsRecursively(json: Any, results: MutableList<YtPlaylistSummary>) {
+        val items = mutableListOf<JSONObject>()
+        collectObjectsRecursively(json, "musicTwoRowItemRenderer", items)
+        collectObjectsRecursively(json, "musicResponsiveListItemRenderer", items)
+        for (item in items) {
+            val nav = item.optJSONObject("navigationEndpoint")?.optJSONObject("browseEndpoint")
+                ?: item.optJSONObject("title")?.optJSONArray("runs")?.optJSONObject(0)?.optJSONObject("navigationEndpoint")?.optJSONObject("browseEndpoint")
+            val browseId = nav?.optString("browseId")?.takeIf { it.isNotBlank() } ?: continue
+            val title = InnerTubeParser.extractText(item, "title") ?: continue
+            val author = InnerTubeParser.extractText(item, "subtitle")
+            val thumb = InnerTubeParser.extractThumbnail(item)
+            results.add(
+                YtPlaylistSummary(
+                    id = browseId,
+                    title = title,
+                    author = author,
+                    trackCountText = null,
+                    artworkUrl = thumb
+                )
+            )
+        }
+    }
+
+    private fun parseTracksFromBrowse(root: JSONObject): List<InnerTubeTrack> {
+        val results = mutableListOf<JSONObject>()
+        collectObjectsRecursively(root, "musicResponsiveListItemRenderer", results)
+        return results.mapNotNull { renderer ->
+            val videoId = InnerTubeParser.extractVideoId(renderer).takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val title = InnerTubeParser.extractText(renderer, "title") ?: "Unknown Title"
+            val artist = InnerTubeParser.extractText(renderer, "subtitle")
+                ?: renderer.optJSONArray("flexColumns")?.optJSONObject(1)
+                    ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+                    ?.optJSONObject("text")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
+                ?: "YouTube Music"
+            val durationText = renderer.optJSONObject("fixedColumns")?.optJSONObject("musicResponsiveListItemFixedColumnRenderer")
+                ?.optJSONObject("text")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text") ?: "3:30"
+            val thumb = InnerTubeParser.extractThumbnail(renderer) ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+            InnerTubeTrack(
+                id = videoId,
+                title = title,
+                artist = artist,
+                durationText = durationText,
+                thumbnailUrl = thumb
+            )
+        }.distinctBy { it.id }
     }
 
     companion object {
