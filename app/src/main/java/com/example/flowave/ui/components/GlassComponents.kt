@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -30,29 +29,17 @@ import com.example.flowave.ui.theme.*
 @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 20.dp,
+    cornerRadius: Dp = 16.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val shape = remember(cornerRadius) { SquircleShape(cornerRadius) }
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
     Box(
         modifier = modifier
             .clip(shape)
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0x22FFFFFF),
-                        Color(0x08FFFFFF)
-                    )
-                )
-            )
+            .background(DarkSurface)
             .border(
                 width = 1.dp,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0x45FFFFFF),
-                        Color(0x0CFFFFFF)
-                    )
-                ),
+                color = GlassBorder,
                 shape = shape
             ),
         content = content
@@ -62,29 +49,17 @@ fun GlassCard(
 @Composable
 fun LiquidGlassCard(
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 24.dp,
+    cornerRadius: Dp = 18.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val shape = remember(cornerRadius) { SquircleShape(cornerRadius) }
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
     Box(
         modifier = modifier
             .clip(shape)
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0x25FFFFFF),
-                        Color(0x0AFFFFFF)
-                    )
-                )
-            )
+            .background(AmoledElevated)
             .border(
                 width = 1.dp,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0x50FFFFFF),
-                        Color(0x0EFFFFFF)
-                    )
-                ),
+                color = GlassBorderWhite,
                 shape = shape
             ),
         content = content
@@ -103,7 +78,6 @@ fun LiquidGlassPill(
     )
 }
 
-// Widget 1: Liquid Glass Stat Card Widget
 @Composable
 fun LiquidGlassStatWidget(
     title: String,
@@ -117,58 +91,55 @@ fun LiquidGlassStatWidget(
         modifier = modifier
             .fillMaxWidth()
             .testTag("glass_stat_widget"),
-        cornerRadius = 24.dp
+        cornerRadius = 16.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(accentColor.copy(alpha = 0.15f))
-                    .border(1.dp, accentColor.copy(alpha = 0.4f), CircleShape),
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accentColor.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = title,
                     tint = accentColor,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title.uppercase(),
                     color = TextMuted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.8.sp
                 )
                 Text(
                     text = value,
                     color = TextPrimary,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.ExtraBold
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = subtitle,
-                    color = accentColor,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+                    color = TextSecondary,
+                    fontSize = 11.sp
                 )
             }
         }
     }
 }
 
-// Widget 2: Liquid Glass Playback Controller Widget
 @Composable
 fun LiquidGlassPlaybackWidget(
     trackTitle: String,
@@ -182,31 +153,26 @@ fun LiquidGlassPlaybackWidget(
         modifier = modifier
             .fillMaxWidth()
             .testTag("glass_playback_widget"),
-        cornerRadius = 24.dp
+        cornerRadius = 16.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(CyanNeon.copy(alpha = 0.3f), PinkNeon.copy(alpha = 0.2f))
-                        )
-                    )
-                    .border(1.dp, CyanNeon.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(CyanNeon.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.GraphicEq,
                     contentDescription = "Waveform",
                     tint = CyanNeon,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
@@ -217,7 +183,7 @@ fun LiquidGlassPlaybackWidget(
                     text = trackTitle,
                     color = TextPrimary,
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -233,14 +199,15 @@ fun LiquidGlassPlaybackWidget(
             IconButton(
                 onClick = onPlayPauseClick,
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .background(CyanNeon)
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = "Play/Pause",
-                    tint = PureBlack
+                    tint = PureBlack,
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
@@ -255,7 +222,6 @@ fun LiquidGlassPlaybackWidget(
     }
 }
 
-// Widget 3: Liquid Glass User Profile Widget
 @Composable
 fun LiquidGlassProfileWidget(
     profile: UserProfile,
@@ -266,101 +232,66 @@ fun LiquidGlassProfileWidget(
         modifier = modifier
             .fillMaxWidth()
             .testTag("glass_profile_widget"),
-        cornerRadius = 28.dp
+        cornerRadius = 18.dp
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(AmoledElevated)
+                    .border(1.dp, CyanNeon.copy(alpha = 0.4f), CircleShape),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(CyanNeon, PinkNeon)
-                            )
-                        )
-                        .padding(2.dp)
-                        .clip(CircleShape)
-                        .background(DarkSurface),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = profile.username.take(1).uppercase(),
-                        color = CyanNeon,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                Text(
+                    text = profile.username.take(1).uppercase(),
+                    color = CyanNeon,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
-                Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(14.dp))
 
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = profile.username,
-                            color = TextPrimary,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            imageVector = Icons.Default.Verified,
-                            contentDescription = "Verified",
-                            tint = CyanNeon,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = profile.username,
+                    color = TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = profile.bio,
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
 
-                    Text(
-                        text = profile.bio,
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Surface(
-                        color = CyanNeon.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(100.dp),
-                        border = androidx.compose.foundation.BorderStroke(0.5.dp, CyanNeon.copy(alpha = 0.5f))
-                    ) {
-                        Text(
-                            text = profile.preferredQuality,
-                            color = CyanNeon,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-
-                IconButton(
-                    onClick = onEditClick,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color(0x22FFFFFF))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit Profile",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+            IconButton(
+                onClick = onEditClick,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(AmoledElevated)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Edit Profile",
+                    tint = TextPrimary,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }
 }
 
-// Widget 4: Liquid Glass Download Progress Widget
 @Composable
 fun LiquidGlassDownloadProgressWidget(
     entry: DownloadEntry,
@@ -371,12 +302,12 @@ fun LiquidGlassDownloadProgressWidget(
         modifier = modifier
             .fillMaxWidth()
             .testTag("glass_download_widget"),
-        cornerRadius = 20.dp
+        cornerRadius = 14.dp
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(14.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -393,10 +324,10 @@ fun LiquidGlassDownloadProgressWidget(
                     tint = when (entry.status) {
                         DownloadStatus.QUEUED -> TextMuted
                         DownloadStatus.DOWNLOADING -> CyanNeon
-                        DownloadStatus.DONE -> Color(0xFF4CAF50)
-                        DownloadStatus.FAILED -> Color(0xFFFF5252)
+                        DownloadStatus.DONE -> Color(0xFF4ADE80)
+                        DownloadStatus.FAILED -> ErrorCrimson
                     },
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(20.dp)
                 )
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -406,7 +337,7 @@ fun LiquidGlassDownloadProgressWidget(
                         text = entry.trackTitle,
                         color = TextPrimary,
                         fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -418,47 +349,35 @@ fun LiquidGlassDownloadProgressWidget(
                     )
                 }
 
-                Surface(
+                Text(
+                    text = entry.status.name,
                     color = when (entry.status) {
-                        DownloadStatus.QUEUED -> Color(0x33FFFFFF)
-                        DownloadStatus.DOWNLOADING -> CyanNeon.copy(alpha = 0.2f)
-                        DownloadStatus.DONE -> Color(0x334CAF50)
-                        DownloadStatus.FAILED -> Color(0x33FF5252)
+                        DownloadStatus.QUEUED -> TextMuted
+                        DownloadStatus.DOWNLOADING -> CyanNeon
+                        DownloadStatus.DONE -> Color(0xFF4ADE80)
+                        DownloadStatus.FAILED -> ErrorCrimson
                     },
-                    shape = RoundedCornerShape(100.dp)
-                ) {
-                    Text(
-                        text = entry.status.name,
-                        color = when (entry.status) {
-                            DownloadStatus.QUEUED -> TextMuted
-                            DownloadStatus.DOWNLOADING -> CyanNeon
-                            DownloadStatus.DONE -> Color(0xFF81C784)
-                            DownloadStatus.FAILED -> Color(0xFFFF8A80)
-                        },
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
-                }
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
 
             if (entry.status == DownloadStatus.DOWNLOADING || entry.status == DownloadStatus.QUEUED) {
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 LinearProgressIndicator(
                     progress = { entry.progress.coerceIn(0f, 1f) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp)),
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp)),
                     color = CyanNeon,
-                    trackColor = Color(0x33FFFFFF)
+                    trackColor = GlassBorder
                 )
             }
         }
     }
 }
 
-// Widget 5: Liquid Glass Quality Selector Widget
 @Composable
 fun LiquidGlassQualitySelectorWidget(
     selectedQuality: String,
@@ -471,36 +390,34 @@ fun LiquidGlassQualitySelectorWidget(
         modifier = modifier
             .fillMaxWidth()
             .testTag("glass_quality_selector"),
-        cornerRadius = 24.dp
+        cornerRadius = 14.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             options.forEach { option ->
                 val isSelected = selectedQuality.contains(option.split(" ").last(), ignoreCase = true) ||
-                        (option == "Ultra FLAC" && selectedQuality.contains("FLAC", ignoreCase = true)) ||
-                        (option == "256k MP3" && selectedQuality.contains("256", ignoreCase = true)) ||
-                        (option == "128k AAC" && selectedQuality.contains("128", ignoreCase = true))
+                    (option == "Ultra FLAC" && selectedQuality.contains("FLAC", ignoreCase = true)) ||
+                    (option == "256k MP3" && selectedQuality.contains("256", ignoreCase = true)) ||
+                    (option == "128k AAC" && selectedQuality.contains("128", ignoreCase = true))
 
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(
-                            if (isSelected) CyanNeon else Color.Transparent
-                        )
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isSelected) CyanNeon else Color.Transparent)
                         .clickable { onQualitySelected(option) }
-                        .padding(vertical = 10.dp),
+                        .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = option,
-                        color = if (isSelected) PureBlack else TextPrimary,
+                        color = if (isSelected) PureBlack else TextSecondary,
                         fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                     )
                 }
             }
@@ -508,7 +425,6 @@ fun LiquidGlassQualitySelectorWidget(
     }
 }
 
-// Widget 6: Liquid Glass Quick Action Widget Tile
 @Composable
 fun LiquidGlassActionTile(
     title: String,
@@ -519,26 +435,26 @@ fun LiquidGlassActionTile(
 ) {
     GlassCard(
         modifier = modifier
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable { onClick() }
             .testTag("glass_action_tile"),
-        cornerRadius = 20.dp
+        cornerRadius = 16.dp
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = title,
                 tint = CyanNeon,
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(22.dp)
             )
             Text(
                 text = title,
                 color = TextPrimary,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
             )
             Text(
                 text = subtitle,

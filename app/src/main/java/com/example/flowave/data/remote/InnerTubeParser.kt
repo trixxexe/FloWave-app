@@ -368,9 +368,13 @@ object InnerTubeParser {
      * Parses the /youtubei/v1/player JSON response, inspecting streamingData.adaptiveFormats
      * (and formats as fallback), filtering for playable audio streams, prioritizing itag 251 (Opus)
      * and itag 140 (M4A/AAC) or highest bitrate audio, rejecting SABR-only responses without direct
-     * format URLs, and accepting hlsManifestUrl as secondary fallback.
+     * format URLs, and accepting hlsManifestUrl as secondary fallback when allowHlsFallback is true.
      */
-    suspend fun parsePlayerResponse(json: JSONObject, okHttpClient: okhttp3.OkHttpClient? = null): String? {
+    suspend fun parsePlayerResponse(
+        json: JSONObject,
+        okHttpClient: okhttp3.OkHttpClient? = null,
+        allowHlsFallback: Boolean = true
+    ): String? {
         val playabilityStatus = json.optJSONObject("playabilityStatus")
         val status = playabilityStatus?.optString("status")
         if (status != null && status != "OK") {
@@ -399,17 +403,79 @@ object InnerTubeParser {
             return extractedUrl
         }
 
-        // 3. Fallback: Accept hlsManifestUrl if no direct/adaptive format URL is available
-        val hlsUrl = streamingData.optString("hlsManifestUrl").takeIf {
-            it.startsWith("http://") || it.startsWith("https://")
-        }
-        if (!hlsUrl.isNullOrBlank()) {
-            return hlsUrl
+        // 3. Fallback: Accept hlsManifestUrl only if allowHlsFallback is true
+        if (allowHlsFallback) {
+            val hlsUrl = streamingData.optString("hlsManifestUrl").takeIf {
+                it.startsWith("http://") || it.startsWith("https://")
+            }
+            if (!hlsUrl.isNullOrBlank()) {
+                return hlsUrl
+            }
         }
 
         // 4. If only serverAbrStreamingUrl is present without direct formats, reject (return null)
         // so the caller immediately advances to the next fallback client profile in the chain.
         return null
+    }
+
+    /**
+     * Parses /youtubei/v1/next response for continuous radio / Automix queue items.
+     */
+    fun parseRadioNextResponse(json: JSONObject): List<InnerTubeTrack> {
+        val tracks = mutableListOf<InnerTubeTrack>()
+        try {
+            val panelRenderers = mutableListOf<JSONObject>()
+            collectPanelVideosRecursively(json, panelRenderers)
+            for (renderer in panelRenderers) {
+                val videoId = renderer.optString("videoId").takeIf { it.isNotBlank() }
+                    ?: extractVideoId(renderer).takeIf { it.isNotBlank() }
+                    ?: continue
+                val title = extractText(renderer, "title") ?: continue
+                val artist = extractText(renderer, "shortBylineText")
+                    ?: extractText(renderer, "longBylineText")
+                    ?: "YouTube Music"
+                val durationText = extractText(renderer, "lengthText") ?: "3:30"
+                val thumbnails = renderer.optJSONObject("thumbnail")?.optJSONArray("thumbnails")
+                val rawThumb = thumbnails?.optJSONObject(thumbnails.length() - 1)?.optString("url")
+                    ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+                tracks.add(
+                    InnerTubeTrack(
+                        id = videoId,
+                        title = title,
+                        artist = artist,
+                        durationText = durationText,
+                        thumbnailUrl = getHighResThumbnail(rawThumb, videoId),
+                        album = "YouTube Music Radio"
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("InnerTubeParser", "Failed to parse radio next response", e)
+        }
+        return tracks.distinctBy { it.id }
+    }
+
+    private fun collectPanelVideosRecursively(json: Any, results: MutableList<JSONObject>) {
+        if (results.size >= 30) return
+        when (json) {
+            is JSONObject -> {
+                if (json.has("playlistPanelVideoRenderer")) {
+                    json.optJSONObject("playlistPanelVideoRenderer")?.let { results.add(it) }
+                }
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val v = json.opt(k) ?: continue
+                    collectPanelVideosRecursively(v, results)
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until json.length()) {
+                    val v = json.opt(i) ?: continue
+                    collectPanelVideosRecursively(v, results)
+                }
+            }
+        }
     }
 
     /**

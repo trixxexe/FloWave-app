@@ -1,6 +1,7 @@
 package com.example.flowave.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -27,9 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.flowave.audio.PlaybackState
-import com.example.flowave.ui.theme.CyanNeon
-import com.example.flowave.ui.theme.TextMuted
-import com.example.flowave.ui.theme.TextPrimary
+import com.example.flowave.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,40 +45,41 @@ fun MiniPlayer(
     modifier: Modifier = Modifier
 ) {
     val track = playbackState.currentTrack ?: return
+    val shape = RoundedCornerShape(16.dp)
 
-    GlassCard(
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 2.dp)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(shape)
+            .background(AmoledElevated)
+            .border(1.dp, GlassBorderWhite, shape)
             .clickable { onExpandClick() }
-            .testTag("mini_player_card"),
-        cornerRadius = 14.dp
+            .testTag("mini_player_card")
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Artwork
-                if (!track.artworkUri.isNullOrEmpty()) {
-                    AsyncImage(
-                        model = track.artworkUri,
-                        contentDescription = "Track Artwork",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFF1E2830)),
-                        contentAlignment = Alignment.Center
-                    ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(DarkSurface),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!track.artworkUri.isNullOrEmpty()) {
+                        AsyncImage(
+                            model = track.artworkUri,
+                            contentDescription = "Track Artwork",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
                         Icon(
                             imageVector = Icons.Default.MusicNote,
                             contentDescription = "No Artwork",
@@ -89,22 +89,22 @@ fun MiniPlayer(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
                 // Title & Artist
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = track.title,
                         color = TextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = track.artist,
-                        color = TextMuted,
-                        fontSize = 11.sp,
+                        text = if (playbackState.isBuffering) "Loading stream..." else track.artist,
+                        color = if (playbackState.isBuffering) CyanNeon else TextMuted,
+                        fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -114,7 +114,7 @@ fun MiniPlayer(
                 IconButton(
                     onClick = onFavoriteClick,
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(36.dp)
                         .testTag("mini_player_favorite_btn")
                 ) {
                     Icon(
@@ -129,23 +129,34 @@ fun MiniPlayer(
                 IconButton(
                     onClick = onPlayPauseClick,
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
+                        .background(CyanNeon.copy(alpha = 0.14f))
                         .testTag("mini_player_play_pause_btn")
                 ) {
-                    Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = "Play/Pause",
-                        tint = CyanNeon,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    if (playbackState.isBuffering && !playbackState.isPlaying) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = CyanNeon,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pause",
+                            tint = CyanNeon,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
+
+                Spacer(modifier = Modifier.width(2.dp))
 
                 // Next
                 IconButton(
                     onClick = onNextClick,
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(36.dp)
                         .testTag("mini_player_next_btn")
                 ) {
                     Icon(
@@ -156,11 +167,11 @@ fun MiniPlayer(
                     )
                 }
 
-                // Close / Cross Dismiss Button
+                // Close
                 IconButton(
                     onClick = onCloseClick,
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(30.dp)
                         .testTag("mini_player_close_btn")
                 ) {
                     Icon(
@@ -172,66 +183,50 @@ fun MiniPlayer(
                 }
             }
 
-            if (playbackState.isBuffering) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().height(2.dp),
-                    color = CyanNeon,
-                    trackColor = Color.Transparent
-                )
-            }
-            playbackState.errorMessage?.let { message ->
+            playbackState.errorMessage?.let {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Playback unavailable", color = Color(0xFFFF9E9E), fontSize = 10.sp, maxLines = 1)
-                    TextButton(onClick = onRetryClick, contentPadding = PaddingValues(0.dp)) {
-                        Text("Retry", color = CyanNeon, fontSize = 11.sp)
+                    Text(
+                        text = "Stream error — tap Retry",
+                        color = ErrorCrimson,
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                    TextButton(
+                        onClick = onRetryClick,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text("Retry", color = CyanNeon, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
 
-            // Sleek Progress Line
-            if (showProgress && playbackState.durationMs > 0) {
-                val posMs = playbackState.currentPositionMs
-                val durMs = playbackState.durationMs.coerceAtLeast(1L)
-                var sliderPos by remember { mutableFloatStateOf(0f) }
-                var isUserSeeking by remember { mutableStateOf(false) }
-
-                val currentProgress = if (isUserSeeking) sliderPos else (posMs.toFloat() / durMs.toFloat()).coerceIn(0f, 1f)
-
-                Slider(
-                    value = currentProgress,
-                    onValueChange = {
-                        isUserSeeking = true
-                        sliderPos = it
-                    },
-                    onValueChangeFinished = {
-                        isUserSeeking = false
-                        onSeek((sliderPos * durMs).toLong())
-                    },
-                    colors = SliderDefaults.colors(
-                        thumbColor = CyanNeon,
-                        activeTrackColor = CyanNeon,
-                        inactiveTrackColor = Color(0x22FFFFFF)
-                    ),
-                    thumb = {
-                        if (isUserSeeking) {
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(CircleShape)
-                                    .background(CyanNeon)
-                            )
-                        } else {
-                            Box(modifier = Modifier.size(0.dp))
-                        }
-                    },
+            if (playbackState.isBuffering) {
+                LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(10.dp)
-                        .testTag("mini_player_seekbar")
+                        .height(2.dp),
+                    color = CyanNeon,
+                    trackColor = Color.Transparent
+                )
+            } else if (showProgress && playbackState.durationMs > 0) {
+                val posMs = playbackState.currentPositionMs
+                val durMs = playbackState.durationMs.coerceAtLeast(1L)
+                val progress = (posMs.toFloat() / durMs.toFloat()).coerceIn(0f, 1f)
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .testTag("mini_player_seekbar"),
+                    color = CyanNeon,
+                    trackColor = GlassBorder
                 )
             }
         }

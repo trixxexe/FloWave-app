@@ -2,7 +2,6 @@ package com.example.flowave.ui.theme
 
 import android.app.Activity
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -12,18 +11,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-private val DarkColorScheme = darkColorScheme(
+private val AmoledColorScheme = darkColorScheme(
     primary = CyanNeon,
     secondary = BlueNeon,
     tertiary = PurpleNeon,
-    background = DarkBackground,
+    background = PureBlack,
     surface = DarkSurface,
+    surfaceContainer = AmoledElevated,
     onPrimary = PureBlack,
     onSecondary = PureBlack,
     onBackground = TextPrimary,
     onSurface = TextPrimary,
     surfaceVariant = GlassSurface,
-    onSurfaceVariant = TextSecondary
+    onSurfaceVariant = TextSecondary,
+    outline = GlassBorder
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -39,8 +40,8 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun FloWaveTheme(
-    darkTheme: Boolean = true, // Default to AMOLED Dark Theme for audio aesthetic
-    dynamicColor: Boolean = false, // Set to false to prioritize custom neon colors
+    darkTheme: Boolean = true,
+    dynamicColor: Boolean = false,
     accentColor: Color? = null,
     fontScaleFactor: Float = 1.0f,
     content: @Composable () -> Unit
@@ -48,9 +49,16 @@ fun FloWaveTheme(
     val baseScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            if (darkTheme) {
+                dynamicDarkColorScheme(context).copy(
+                    background = PureBlack,
+                    surface = DarkSurface
+                )
+            } else {
+                dynamicLightColorScheme(context)
+            }
         }
-        darkTheme -> DarkColorScheme
+        darkTheme -> AmoledColorScheme
         else -> LightColorScheme
     }
 

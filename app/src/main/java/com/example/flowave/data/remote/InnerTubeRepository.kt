@@ -1,24 +1,25 @@
 package com.example.flowave.data.remote
 
 import android.content.Context
-import com.example.flowave.FloWaveRuntime
 import com.example.flowave.FloWaveApplication
+import com.example.flowave.audio.OnlinePlaybackPolicy
 import com.example.flowave.data.model.InnerTubeTrack
-import com.example.flowave.data.model.Track
 import com.example.flowave.data.model.LrcLine
+import com.example.flowave.data.model.Track
 import com.example.flowave.data.ytmusic.YtAccountInfo
-import com.example.flowave.data.ytmusic.YtConnection
 import com.example.flowave.data.ytmusic.YtMusicAuthManager
 import com.example.flowave.data.ytmusic.YtPlaylistSummary
+import com.example.flowave.diagnostics.FloWaveLogger
+import com.example.flowave.downloader.SealStyleDownloadEngine
 import com.example.flowave.utils.FloWaveConstants
 import com.example.flowave.utils.YouTubeDecipherer
-import com.example.flowave.diagnostics.FloWaveLogger
-import com.example.flowave.audio.OnlinePlaybackPolicy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.CancellationException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -30,8 +31,6 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 data class InnerTubeClientConfig(
     val clientName: String,
@@ -129,7 +128,37 @@ open class InnerTubeRepository(context: Context? = null) {
         .followSslRedirects(true)
         .build()
 
+    private val probeClient = client.newBuilder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .build()
+
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    private val androidVrQuest3 = InnerTubeClientConfig(
+        clientName = "ANDROID_VR",
+        clientVersion = "1.62.27",
+        deviceMake = "Oculus",
+        deviceModel = "Quest 3",
+        osName = "Android",
+        osVersion = "14",
+        androidSdkVersion = 34,
+        hl = "en",
+        gl = "US",
+        userAgent = "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 14; en_US; Quest 3; Build/UP1A.231005.007.A1) gzip",
+        clientNumber = "28"
+    )
+
+    // Prioritize ANDROID_VR (returns direct Opus/M4A URLs without SABR or JS cipher),
+    // followed by TVHTML5_SIMPLY_EMBEDDED_PLAYER, WEB_REMIX, IOS, and VISIONOS.
+    private val extractionPriorityChain = listOf(
+        InnerTubeClients.ANDROID_VR,
+        androidVrQuest3,
+        InnerTubeClients.TVHTML5_SIMPLY_EMBEDDED_PLAYER,
+        InnerTubeClients.WEB_REMIX,
+        InnerTubeClients.IOS,
+        InnerTubeClients.VISIONOS
+    )
 
     // Cache stream URLs and resolutions for 30 minutes to avoid re-querying YouTube endpoints
     private val streamUrlCache = ConcurrentHashMap<String, Pair<Long, String>>()
@@ -155,7 +184,50 @@ open class InnerTubeRepository(context: Context? = null) {
     private var cachedVisitorData: String? = null
     private val visitorDataLock = Mutex()
 
+    private fun applyAuthHeaders(
+        reqBuilder: Request.Builder,
+        contextJson: JSONObject? = null,
+        origin: String = "https://music.youtube.com",
+        visitorDataOverride: String? = null
+    ) {
+        val auth = authManager ?: return
+        val conn = auth.connection.value
+        val activeVisitorData = visitorDataOverride?.takeIf { it.isNotBlank() }
+            ?: conn.visitorData?.takeIf { it.isNotBlank() }
+            ?: cachedVisitorData?.takeIf { it.isNotBlank() }
+
+        if (!activeVisitorData.isNullOrBlank()) {
+            reqBuilder.header("X-Goog-Visitor-Id", activeVisitorData)
+            contextJson?.optJSONObject("client")?.put("visitorData", activeVisitorData)
+        }
+
+        if (conn.isConnected) {
+            auth.cookieHeaderValue()?.let { cookie ->
+                reqBuilder.header(
+                    "Cookie",
+                    "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $cookie"
+                )
+            }
+            auth.authorizationHeaderValue(origin = origin)?.let { authHeader ->
+                reqBuilder.header("Authorization", authHeader)
+            }
+            reqBuilder.header("X-Goog-AuthUser", (conn.authUserIndex ?: 0).toString())
+            conn.onBehalfOfUser?.takeIf { it.isNotBlank() }?.let { syncId ->
+                val cleanSyncId = syncId.substringBefore("||").ifBlank { syncId }
+                contextJson?.put("user", JSONObject().apply {
+                    put("onBehalfOfUser", cleanSyncId)
+                    put("lockedSafetyMode", false)
+                })
+            }
+        }
+    }
+
     suspend fun getVisitorData(forceRefresh: Boolean = false): String? = withContext(Dispatchers.IO) {
+        val authVisitor = authManager?.connection?.value?.visitorData?.takeIf { it.isNotBlank() }
+        if (!forceRefresh && !authVisitor.isNullOrBlank()) {
+            cachedVisitorData = authVisitor
+            return@withContext authVisitor
+        }
         if (!forceRefresh && !cachedVisitorData.isNullOrBlank()) {
             return@withContext cachedVisitorData
         }
@@ -235,12 +307,16 @@ open class InnerTubeRepository(context: Context? = null) {
         val lock = streamResolutionLocks.computeIfAbsent(videoId) { Mutex() }
         return try {
             lock.withLock { getStreamResolutionInternal(videoId, forceRefresh) }
-                .also { logger?.info("online", "stream_resolved", context = mapOf(
-                    "videoId" to videoId,
-                    "resolverSuccess" to true,
-                    "urlHost" to (runCatching { java.net.URI(it.url).host }.getOrNull().orEmpty())
-                )) }
-        } catch (error: kotlinx.coroutines.CancellationException) {
+                .also {
+                    logger?.info("online", "stream_resolved", context = mapOf(
+                        "videoId" to videoId,
+                        "resolverSuccess" to true,
+                        "resolver" to it.resolver,
+                        "candidateKey" to it.candidateKey.orEmpty(),
+                        "urlHost" to (runCatching { java.net.URI(it.url).host }.getOrNull().orEmpty())
+                    ))
+                }
+        } catch (error: CancellationException) {
             logger?.debug("online", "stream_resolution_cancelled", context = mapOf("videoId" to videoId, "reason" to "resolver_cancelled"))
             throw error
         } catch (error: InterruptedException) {
@@ -287,8 +363,7 @@ open class InnerTubeRepository(context: Context? = null) {
                 val secs = parts[2].toLongOrNull() ?: 0L
                 seconds = hours * 3600 + minutes * 60 + secs
             }
-        } catch (e: Exception) {
-            // Fallback
+        } catch (_: Exception) {
         }
         return if (seconds > 0L) seconds * 1000L else 210000L
     }
@@ -313,22 +388,19 @@ open class InnerTubeRepository(context: Context? = null) {
 
     private suspend fun executeWithRetry(request: Request, maxRetries: Int = 3): Response = withContext(Dispatchers.IO) {
         var lastException: IOException? = null
-        var delayMs = 1000L
+        var delayMs = 800L
         for (attempt in 1..maxRetries) {
             try {
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
                     return@withContext response
                 }
-                
+
                 val code = response.code
-                android.util.Log.w("InnerTubeRepository", "HTTP call returned code $code on attempt $attempt")
-                
-                // If it's a non-retryable client error, do not retry
                 if (code == 400 || code == 401 || code == 403 || code == 404) {
                     return@withContext response
                 }
-                
+
                 response.close()
                 if (attempt < maxRetries) {
                     delay(delayMs)
@@ -336,14 +408,12 @@ open class InnerTubeRepository(context: Context? = null) {
                 }
             } catch (e: SocketTimeoutException) {
                 lastException = e
-                android.util.Log.w("InnerTubeRepository", "Timeout on attempt $attempt: ${e.message}")
                 if (attempt < maxRetries) {
                     delay(delayMs)
                     delayMs *= 2
                 }
             } catch (e: IOException) {
                 lastException = e
-                android.util.Log.w("InnerTubeRepository", "I/O error on attempt $attempt: ${e.message}")
                 if (attempt < maxRetries) {
                     delay(delayMs)
                     delayMs *= 2
@@ -356,47 +426,82 @@ open class InnerTubeRepository(context: Context? = null) {
     private fun isStreamUrlExpired(url: String): Boolean =
         OnlinePlaybackPolicy.isExpired(url)
 
+    /**
+     * Lightweight Range probe (`bytes=0-0`) to verify that googlevideo.com accepts the stream URL
+     * and headers (no HTTP 403 Forbidden) before handing it to ExoPlayer.
+     */
+    private fun probeStreamPlayable(
+        url: String,
+        userAgent: String,
+        headers: Map<String, String>
+    ): Boolean {
+        if (url.endsWith(".m3u8") || url.contains(".m3u8?")) return true
+        val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
+        if (host == "localhost" || host == "127.0.0.1" || host.endsWith(".example.com")) {
+            return true
+        }
+        return try {
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .get()
+                .header("User-Agent", userAgent)
+                .header("Range", "bytes=0-0")
+            headers.forEach { (k, v) ->
+                if (!k.equals("Range", ignoreCase = true)) {
+                    reqBuilder.header(k, v)
+                }
+            }
+            probeClient.newCall(reqBuilder.build()).execute().use { resp ->
+                val code = resp.code
+                val contentType = resp.header("Content-Type")
+                val ok = (code in 200..299) && OnlinePlaybackPolicy.isPlayableResponseContentType(contentType)
+                if (!ok) {
+                    logger?.warn("online", "stream_probe_rejected", context = mapOf(
+                        "httpCode" to code,
+                        "contentType" to contentType.orEmpty()
+                    ))
+                }
+                ok
+            }
+        } catch (e: Exception) {
+            // Do not fail resolution on transient probe timeout; let ExoPlayer attempt open.
+            true
+        }
+    }
+
     suspend fun searchTracks(query: String): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
-        ensureKeysUpdated()
         val tracks = mutableListOf<InnerTubeTrack>()
 
         // ENGINE 1: YouTube Music InnerTube Search (WEB_REMIX client with Songs filter)
         try {
-            val requestBodyJson = JSONObject().apply {
-                put("context", JSONObject().apply {
-                    put("client", JSONObject().apply {
-                        put("clientName", InnerTubeClients.WEB_REMIX.clientName)
-                        put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
-                        put("hl", "en")
-                        put("gl", "US")
-                    })
+            val contextJson = JSONObject().apply {
+                put("client", JSONObject().apply {
+                    put("clientName", InnerTubeClients.WEB_REMIX.clientName)
+                    put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
+                    put("hl", "en")
+                    put("gl", "US")
                 })
-                put("query", query)
-                put("params", "EgWKAQIIAWoKEAkQBRAKEAMQBBAK") // Filter for Songs
             }
 
             val reqBuilder = Request.Builder()
                 .url(FloWaveConstants.INNERTUBE_SEARCH_URL)
-                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
                 .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
                 .header("Origin", "https://music.youtube.com")
                 .header("Referer", "https://music.youtube.com/")
+                .header("X-YouTube-Client-Name", "67")
+                .header("X-YouTube-Client-Version", InnerTubeClients.WEB_REMIX.clientVersion)
 
-            authManager?.let { auth ->
-                if (auth.connection.value.isConnected) {
-                    auth.cookieHeaderValue()?.let {
-                        reqBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
-                    }
-                    auth.authorizationHeaderValue()?.let {
-                        reqBuilder.header("Authorization", it)
-                    }
-                }
+            applyAuthHeaders(reqBuilder, contextJson, origin = "https://music.youtube.com")
+
+            val requestBodyJson = JSONObject().apply {
+                put("context", contextJson)
+                put("query", query)
+                put("params", "EgWKAQIIAWoKEAkQBRAKEAMQBBAK") // Songs filter
             }
+            reqBuilder.post(requestBodyJson.toString().toRequestBody(jsonMediaType))
 
-            val request = reqBuilder.build()
-
-            executeWithRetry(request, maxRetries = 2).use { response ->
+            executeWithRetry(reqBuilder.build(), maxRetries = 2).use { response ->
                 val bodyString = response.body?.string() ?: ""
                 if (response.isSuccessful && bodyString.isNotEmpty()) {
                     val json = JSONObject(bodyString)
@@ -405,9 +510,6 @@ open class InnerTubeRepository(context: Context? = null) {
                     }
                     val parsed = InnerTubeParser.parseInnerTubeSearchJson(json)
                     tracks.addAll(parsed)
-                    if (parsed.isNotEmpty()) {
-                        android.util.Log.d("InnerTubeRepository", "Search results fetched from InnerTube Music Search for query: $query (${parsed.size} tracks)")
-                    }
                 }
             }
         } catch (e: Exception) {
@@ -416,7 +518,46 @@ open class InnerTubeRepository(context: Context? = null) {
 
         if (tracks.isNotEmpty()) return@withContext tracks
 
-        // ENGINE 0: YouTube HTML Scraping Fallback (ytInitialData)
+        // ENGINE 2: Unfiltered WEB_REMIX search (includes videos/remixes/live performances)
+        try {
+            val contextJson = JSONObject().apply {
+                put("client", JSONObject().apply {
+                    put("clientName", InnerTubeClients.WEB_REMIX.clientName)
+                    put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
+                    put("hl", "en")
+                    put("gl", "US")
+                })
+            }
+            val reqBuilder = Request.Builder()
+                .url(FloWaveConstants.INNERTUBE_SEARCH_URL)
+                .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
+                .header("Origin", "https://music.youtube.com")
+                .header("Referer", "https://music.youtube.com/")
+                .header("X-YouTube-Client-Name", "67")
+                .header("X-YouTube-Client-Version", InnerTubeClients.WEB_REMIX.clientVersion)
+
+            applyAuthHeaders(reqBuilder, contextJson, origin = "https://music.youtube.com")
+
+            val requestBodyJson = JSONObject().apply {
+                put("context", contextJson)
+                put("query", query)
+            }
+            reqBuilder.post(requestBodyJson.toString().toRequestBody(jsonMediaType))
+
+            executeWithRetry(reqBuilder.build(), maxRetries = 1).use { response ->
+                val bodyString = response.body?.string() ?: ""
+                if (response.isSuccessful && bodyString.isNotEmpty()) {
+                    val json = JSONObject(bodyString)
+                    val parsed = InnerTubeParser.parseInnerTubeSearchJson(json)
+                    tracks.addAll(parsed)
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        if (tracks.isNotEmpty()) return@withContext tracks
+
+        // ENGINE 3: YouTube HTML Scraping Fallback (ytInitialData)
         try {
             val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
             val searchUrl = "https://www.youtube.com/results?search_query=$encodedQuery&sp=EgIQAQ%253D%253D"
@@ -434,14 +575,10 @@ open class InnerTubeRepository(context: Context? = null) {
                 if (response.isSuccessful && html.isNotEmpty()) {
                     val jsonString = extractJsonFromHtml(html)
                     if (jsonString != null) {
-                        try {
-                            val json = JSONObject(jsonString)
-                            val scrapedTracks = InnerTubeParser.parseYtInitialData(json)
-                            if (scrapedTracks.isNotEmpty()) {
-                                tracks.addAll(scrapedTracks)
-                            }
-                        } catch (je: org.json.JSONException) {
-                            android.util.Log.e("InnerTubeRepository", "Extracted JSON string is malformed.", je)
+                        val json = JSONObject(jsonString)
+                        val scrapedTracks = InnerTubeParser.parseYtInitialData(json)
+                        if (scrapedTracks.isNotEmpty()) {
+                            tracks.addAll(scrapedTracks)
                         }
                     }
                 }
@@ -453,8 +590,59 @@ open class InnerTubeRepository(context: Context? = null) {
         tracks
     }
 
+    /**
+     * Fetches related radio / Automix tracks for continuous playback when a user plays an online song.
+     */
+    suspend fun fetchRadioQueue(videoId: String, playlistId: String? = null): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
+        if (videoId.isBlank()) return@withContext emptyList()
+        try {
+            val contextJson = JSONObject().apply {
+                put("client", JSONObject().apply {
+                    put("clientName", InnerTubeClients.WEB_REMIX.clientName)
+                    put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
+                    put("hl", "en")
+                    put("gl", "US")
+                })
+            }
+            val reqBuilder = Request.Builder()
+                .url("https://music.youtube.com/youtubei/v1/next?prettyPrint=false")
+                .header("Content-Type", "application/json")
+                .header("User-Agent", InnerTubeClients.WEB_REMIX.userAgent)
+                .header("Origin", "https://music.youtube.com")
+                .header("Referer", "https://music.youtube.com/")
+                .header("X-YouTube-Client-Name", "67")
+                .header("X-YouTube-Client-Version", InnerTubeClients.WEB_REMIX.clientVersion)
+
+            applyAuthHeaders(reqBuilder, contextJson, origin = "https://music.youtube.com")
+
+            val bodyJson = JSONObject().apply {
+                put("context", contextJson)
+                put("videoId", videoId)
+                put("playlistId", playlistId ?: "RDAMVM$videoId")
+                put("isAudioOnly", true)
+                put("enablePersistentPlaylistPanel", true)
+            }
+            reqBuilder.post(bodyJson.toString().toRequestBody(jsonMediaType))
+
+            executeWithRetry(reqBuilder.build(), maxRetries = 1).use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful && body.isNotEmpty()) {
+                    val json = JSONObject(body)
+                    val parsed = InnerTubeParser.parseRadioNextResponse(json)
+                        .filter { it.id != videoId }
+                    if (parsed.isNotEmpty()) {
+                        return@withContext parsed
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logger?.warn("online", "fetch_radio_queue_failed", context = mapOf("videoId" to videoId), throwable = e)
+        }
+        emptyList()
+    }
+
     suspend fun getTrackMetadata(videoId: String): InnerTubeTrack? = withContext(Dispatchers.IO) {
-        for (clientConfig in InnerTubeClients.FALLBACK_CHAIN) {
+        for (clientConfig in extractionPriorityChain) {
             try {
                 val clientJson = JSONObject().apply {
                     put("clientName", clientConfig.clientName)
@@ -467,17 +655,19 @@ open class InnerTubeRepository(context: Context? = null) {
                     put("hl", "en")
                     put("gl", "US")
                 }
+                val contextJson = JSONObject().apply {
+                    put("client", clientJson)
+                }
                 val requestBodyJson = JSONObject().apply {
-                    put("context", JSONObject().apply {
-                        put("client", clientJson)
-                    })
+                    put("context", contextJson)
                     put("videoId", videoId)
                     put("contentCheckOk", true)
                     put("racyCheckOk", true)
                 }
 
-                val playerUrl = if (clientConfig.clientName.contains("WEB")) {
-                    "https://www.youtube.com/youtubei/v1/player?key=${FloWaveConstants.INNERTUBE_KEY_WEB}&prettyPrint=false"
+                val isRemix = clientConfig.clientName == "WEB_REMIX"
+                val playerUrl = if (isRemix) {
+                    "https://music.youtube.com/youtubei/v1/player?prettyPrint=false"
                 } else {
                     "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
                 }
@@ -503,11 +693,11 @@ open class InnerTubeRepository(context: Context? = null) {
                             val title = videoDetails.optString("title", "Unknown Title")
                             val artist = videoDetails.optString("author", "Unknown Artist")
                             val lengthSeconds = videoDetails.optString("lengthSeconds", "0").toLongOrNull() ?: 0L
-                            
+
                             val durationMinutes = lengthSeconds / 60
                             val durationRemainingSeconds = lengthSeconds % 60
                             val durationText = String.format("%d:%02d", durationMinutes, durationRemainingSeconds)
-                            
+
                             var thumbUrl = ""
                             val thumbnailObj = videoDetails.optJSONObject("thumbnail")
                             if (thumbnailObj != null) {
@@ -526,7 +716,7 @@ open class InnerTubeRepository(context: Context? = null) {
                                 artist = artist,
                                 durationText = durationText,
                                 thumbnailUrl = thumbUrl,
-                                album = "YouTube Stream Extraction"
+                                album = "YouTube Music"
                             )
                         }
                     }
@@ -573,131 +763,164 @@ open class InnerTubeRepository(context: Context? = null) {
         // Check cache first
         val cached = streamResolutionCache[videoId]
         if (cached != null) {
-            val expired = isStreamUrlExpired(cached.second.url) || (System.currentTimeMillis() - cached.first) >= FloWaveConstants.STREAM_CACHE_DURATION_MS
+            val expired = isStreamUrlExpired(cached.second.url) ||
+                (System.currentTimeMillis() - cached.first) >= FloWaveConstants.STREAM_CACHE_DURATION_MS
             if (!expired) {
-                android.util.Log.d("FloWaveInnerTube", "Stream resolution served from cache for $videoId")
                 return@withContext cached.second
             } else {
                 streamResolutionCache.remove(videoId)
                 streamUrlCache.remove(videoId)
-                android.util.Log.d("FloWaveInnerTube", "Cached resolution for $videoId expired. Refetching...")
             }
         }
 
-        // 1. InnerTube Multi-Client Extraction Chain (Native direct extraction)
-        // Never attach stub or placeholder tokens unless verified non-stub
         val poToken = try {
-            withTimeoutOrNull(800L) {
-                poTokenGenerator?.generateToken(videoId)?.takeIf { com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(it) }
+            withTimeoutOrNull(600L) {
+                poTokenGenerator?.generateToken(videoId)?.takeIf {
+                    com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(it)
+                }
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
 
         var visitorData = getVisitorData(forceRefresh = forceRefresh)
         var needFreshVisitorData = false
+        val sts = YouTubeDecipherer.getSignatureTimestamp()
+        val isSignedIn = authManager?.connection?.value?.isConnected == true
+        val hlsFallbacks = mutableListOf<ResolvedStreamSource>()
 
-        for ((attempt, clientConfig) in InnerTubeClients.STREAM_FALLBACK_CHAIN.withIndex()) {
-            try {
-                if (needFreshVisitorData) {
-                    visitorData = getVisitorData(forceRefresh = true)
-                    needFreshVisitorData = false
+        for ((attempt, clientConfig) in extractionPriorityChain.withIndex()) {
+            // When signed in, try authenticated request for WEB_REMIX / TVHTML5 and also fallback to unauthenticated;
+            // for ANDROID_VR, try unauthenticated first (fastest direct URLs) then authenticated if LOGIN_REQUIRED.
+            val authModes = if (isSignedIn) {
+                if (clientConfig.clientName == "WEB_REMIX" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                    listOf(true, false)
+                } else {
+                    listOf(false, true)
                 }
+            } else {
+                listOf(false)
+            }
 
-                val clientJson = JSONObject().apply {
-                    put("clientName", clientConfig.clientName)
-                    put("clientVersion", clientConfig.clientVersion)
-                    clientConfig.deviceMake?.let { put("deviceMake", it) }
-                    clientConfig.deviceModel?.let { put("deviceModel", it) }
-                    clientConfig.osName?.let { put("osName", it) }
-                    clientConfig.osVersion?.let { put("osVersion", it) }
-                    clientConfig.androidSdkVersion?.let { put("androidSdkVersion", it) }
-                    put("hl", clientConfig.hl)
-                    put("gl", clientConfig.gl)
-                    if (!visitorData.isNullOrBlank()) {
-                        put("visitorData", visitorData)
-                    }
-                }
-
-                val charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-                val cpn = (1..16).map { charset.random() }.joinToString("")
-
-                val requestBodyJson = JSONObject().apply {
-                    put("context", JSONObject().apply {
-                        put("client", clientJson)
-                    })
-                    put("cpn", cpn)
-                    put("videoId", videoId)
-                    put("contentCheckOk", true)
-                    put("racyCheckOk", true)
-
-                    // TVHTML5_SIMPLY_EMBEDDED_PLAYER requires thirdParty embedUrl
-                    if (clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
-                        put("thirdParty", JSONObject().apply {
-                            put("embedUrl", "https://www.youtube.com/")
-                        })
+            for (useAuth in authModes) {
+                try {
+                    if (needFreshVisitorData) {
+                        visitorData = getVisitorData(forceRefresh = true)
+                        needFreshVisitorData = false
                     }
 
-                    // Attach serviceIntegrityDimensions ONLY if a verified non-stub token is present
-                    if (com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(poToken)) {
-                        put("serviceIntegrityDimensions", JSONObject().apply {
-                            put("poToken", poToken)
-                        })
-                    }
-                }
-
-                val playerUrl = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
-
-                val reqBuilder = Request.Builder()
-                    .url(playerUrl)
-                    .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
-                    .header("User-Agent", clientConfig.userAgent)
-                    .header("Content-Type", "application/json")
-
-                clientConfig.clientNumber?.let { reqBuilder.header("X-YouTube-Client-Name", it) }
-                reqBuilder.header("X-YouTube-Client-Version", clientConfig.clientVersion)
-                if (!visitorData.isNullOrBlank()) {
-                    reqBuilder.header("X-Goog-Visitor-Id", visitorData)
-                }
-                if (clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
-                    reqBuilder.header("Origin", "https://www.youtube.com")
-                    reqBuilder.header("Referer", "https://www.youtube.com/")
-                }
-
-                val request = reqBuilder.build()
-
-                executeWithRetry(request, maxRetries = 1).use { response ->
-                    val bodyString = response.body?.string() ?: ""
-                    if (response.isSuccessful && bodyString.isNotEmpty()) {
-                        val json = JSONObject(bodyString)
-
-                        // Update visitorData if responseContext contains it
-                        json.optJSONObject("responseContext")?.optString("visitorData")?.takeIf { it.isNotBlank() }?.let {
-                            cachedVisitorData = it
+                    val clientJson = JSONObject().apply {
+                        put("clientName", clientConfig.clientName)
+                        put("clientVersion", clientConfig.clientVersion)
+                        clientConfig.deviceMake?.let { put("deviceMake", it) }
+                        clientConfig.deviceModel?.let { put("deviceModel", it) }
+                        clientConfig.osName?.let { put("osName", it) }
+                        clientConfig.osVersion?.let { put("osVersion", it) }
+                        clientConfig.androidSdkVersion?.let { put("androidSdkVersion", it) }
+                        put("hl", clientConfig.hl)
+                        put("gl", clientConfig.gl)
+                        if (!visitorData.isNullOrBlank()) {
+                            put("visitorData", visitorData)
                         }
+                    }
 
-                        val playabilityStatus = json.optJSONObject("playabilityStatus")
-                        val status = playabilityStatus?.optString("status")
-                        if (status != null && status != "OK") {
-                            logger?.warn("online", "inner_tube_not_playable", context = mapOf(
-                                "videoId" to videoId,
-                                "client" to clientConfig.clientName,
-                                "status" to status,
-                                "reason" to (playabilityStatus.optString("reason").take(200))
-                            ))
-                            if (status == "LOGIN_REQUIRED") {
-                                needFreshVisitorData = true
-                                cachedVisitorData = null
+                    val contextJson = JSONObject().apply {
+                        put("client", clientJson)
+                        if (clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                            put("thirdParty", JSONObject().apply {
+                                put("embedUrl", "https://www.youtube.com/")
+                            })
+                        }
+                    }
+
+                    val isRemix = clientConfig.clientName == "WEB_REMIX"
+                    val originUrl = if (isRemix) "https://music.youtube.com" else "https://www.youtube.com"
+                    val playerUrl = if (isRemix) {
+                        "https://music.youtube.com/youtubei/v1/player?prettyPrint=false"
+                    } else {
+                        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+                    }
+
+                    val reqBuilder = Request.Builder()
+                        .url(playerUrl)
+                        .header("User-Agent", clientConfig.userAgent)
+                        .header("Content-Type", "application/json")
+
+                    clientConfig.clientNumber?.let { reqBuilder.header("X-YouTube-Client-Name", it) }
+                    reqBuilder.header("X-YouTube-Client-Version", clientConfig.clientVersion)
+                    if (!visitorData.isNullOrBlank()) {
+                        reqBuilder.header("X-Goog-Visitor-Id", visitorData)
+                    }
+                    if (isRemix || clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                        reqBuilder.header("Origin", originUrl)
+                        reqBuilder.header("Referer", "$originUrl/")
+                    }
+
+                    if (useAuth) {
+                        applyAuthHeaders(reqBuilder, contextJson, origin = originUrl, visitorDataOverride = visitorData)
+                    }
+
+                    val charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+                    val cpn = (1..16).map { charset.random() }.joinToString("")
+
+                    val requestBodyJson = JSONObject().apply {
+                        put("context", contextJson)
+                        put("cpn", cpn)
+                        put("videoId", videoId)
+                        put("contentCheckOk", true)
+                        put("racyCheckOk", true)
+                        put("playbackContext", JSONObject().apply {
+                            put("contentPlaybackContext", JSONObject().apply {
+                                put("html5Preference", "HTML5_PREF_WANTS")
+                                put("signatureTimestamp", sts)
+                            })
+                        })
+                        if (clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                            put("thirdParty", JSONObject().apply {
+                                put("embedUrl", "https://www.youtube.com/")
+                            })
+                        }
+                        if (com.example.flowave.data.remote.botguard.PoTokenGenerator.isValidToken(poToken)) {
+                            put("serviceIntegrityDimensions", JSONObject().apply {
+                                put("poToken", poToken)
+                            })
+                        }
+                    }
+
+                    reqBuilder.post(requestBodyJson.toString().toRequestBody(jsonMediaType))
+
+                    executeWithRetry(reqBuilder.build(), maxRetries = 1).use { response ->
+                        val bodyString = response.body?.string() ?: ""
+                        if (response.isSuccessful && bodyString.isNotEmpty()) {
+                            val json = JSONObject(bodyString)
+
+                            json.optJSONObject("responseContext")?.optString("visitorData")?.takeIf { it.isNotBlank() }?.let {
+                                cachedVisitorData = it
                             }
-                        } else {
-                            val extractedUrl = InnerTubeParser.parsePlayerResponse(json, client)
-                            if (!extractedUrl.isNullOrBlank()) {
-                                logger?.info("online", "inner_tube_client_succeeded", context = mapOf(
-                                    "videoId" to videoId,
-                                    "client" to clientConfig.clientName
-                                ))
 
-                                val requestHeaders = mutableMapOf<String, String>(
+                            val videoDetails = json.optJSONObject("videoDetails")
+                            val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
+                            val durationSec = lengthSecondsStr?.toLongOrNull()
+                            if (durationSec != null && durationSec > 0L) {
+                                streamDurationCache[videoId] = durationSec * 1000L
+                            }
+
+                            val playabilityStatus = json.optJSONObject("playabilityStatus")
+                            val status = playabilityStatus?.optString("status")
+                            if (status != null && status != "OK") {
+                                logger?.warn("online", "inner_tube_not_playable", context = mapOf(
+                                    "videoId" to videoId,
+                                    "client" to clientConfig.clientName,
+                                    "authenticated" to useAuth,
+                                    "status" to status,
+                                    "reason" to (playabilityStatus.optString("reason").take(200))
+                                ))
+                                if (status == "LOGIN_REQUIRED" && !useAuth) {
+                                    needFreshVisitorData = true
+                                    cachedVisitorData = null
+                                }
+                            } else {
+                                val requestHeaders = mutableMapOf(
                                     "User-Agent" to clientConfig.userAgent
                                 )
                                 clientConfig.clientNumber?.let { requestHeaders["X-YouTube-Client-Name"] = it }
@@ -705,124 +928,113 @@ open class InnerTubeRepository(context: Context? = null) {
                                 if (!visitorData.isNullOrBlank()) {
                                     requestHeaders["X-Goog-Visitor-Id"] = visitorData
                                 }
-                                if (clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
-                                    requestHeaders["Origin"] = "https://www.youtube.com"
-                                    requestHeaders["Referer"] = "https://www.youtube.com/"
+                                if (isRemix || clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                                    requestHeaders["Origin"] = originUrl
+                                    requestHeaders["Referer"] = "$originUrl/"
                                 }
 
-                                val resolvedSource = ResolvedStreamSource(
-                                    url = extractedUrl,
-                                    resolver = "inner_tube",
-                                    candidateKey = clientConfig.clientName,
-                                    userAgent = clientConfig.userAgent,
-                                    requestHeaders = requestHeaders
+                                // Primary check: require direct progressive audio URL (allowHlsFallback = false)
+                                val directUrl = InnerTubeParser.parsePlayerResponse(
+                                    json = json,
+                                    okHttpClient = client,
+                                    allowHlsFallback = false
                                 )
-
-                                streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
-                                streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
-
-                                val videoDetails = json.optJSONObject("videoDetails")
-                                val lengthSecondsStr = videoDetails?.optString("lengthSeconds")
-                                val durationSec = lengthSecondsStr?.toLongOrNull()
-                                if (durationSec != null) {
-                                    streamDurationCache[videoId] = durationSec * 1000L
+                                if (!directUrl.isNullOrBlank()) {
+                                    if (probeStreamPlayable(directUrl, clientConfig.userAgent, requestHeaders)) {
+                                        logger?.info("online", "inner_tube_client_succeeded", context = mapOf(
+                                            "videoId" to videoId,
+                                            "client" to clientConfig.clientName,
+                                            "authenticated" to useAuth
+                                        ))
+                                        val resolvedSource = ResolvedStreamSource(
+                                            url = directUrl,
+                                            resolver = if (isRemix) "inner_tube_remix" else "inner_tube",
+                                            candidateKey = clientConfig.clientName,
+                                            userAgent = clientConfig.userAgent,
+                                            requestHeaders = requestHeaders
+                                        )
+                                        streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
+                                        streamUrlCache[videoId] = Pair(System.currentTimeMillis(), directUrl)
+                                        return@withContext resolvedSource
+                                    }
+                                } else {
+                                    // Record HLS manifest only as a last-resort fallback after all direct clients are tried
+                                    val hlsUrl = InnerTubeParser.parsePlayerResponse(
+                                        json = json,
+                                        okHttpClient = client,
+                                        allowHlsFallback = true
+                                    )
+                                    if (!hlsUrl.isNullOrBlank()) {
+                                        hlsFallbacks.add(
+                                            ResolvedStreamSource(
+                                                url = hlsUrl,
+                                                resolver = "inner_tube_hls",
+                                                candidateKey = clientConfig.clientName,
+                                                userAgent = clientConfig.userAgent,
+                                                requestHeaders = requestHeaders
+                                            )
+                                        )
+                                    } else {
+                                        logger?.warn("online", "inner_tube_formats_url_less_or_sabr", context = mapOf(
+                                            "videoId" to videoId,
+                                            "client" to clientConfig.clientName
+                                        ))
+                                    }
                                 }
-                                return@withContext resolvedSource
-                            } else {
-                                // SABR / URL-less format response detected
-                                logger?.warn("online", "inner_tube_formats_url_less_or_sabr", context = mapOf(
-                                    "videoId" to videoId,
-                                    "client" to clientConfig.clientName
-                                ))
                             }
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw e
+                } catch (e: Exception) {
+                    logger?.warn("online", "resolver_attempt_failed", context = mapOf(
+                        "videoId" to videoId,
+                        "resolver" to "inner_tube",
+                        "attempt" to attempt + 1,
+                        "client" to clientConfig.clientName,
+                        "failureClass" to OnlinePlaybackPolicy.classifyResolverFailure(e)
+                    ), throwable = e)
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                throw e
+            }
+        }
+
+        // 2. Native yt-dlp binary fallback (if bundled binary is available on device)
+        if (appContext != null) {
+            try {
+                val ytDlpUrl = withTimeoutOrNull(8_000L) {
+                    SealStyleDownloadEngine(appContext).resolveAudioUrl(
+                        url = "https://www.youtube.com/watch?v=$videoId",
+                        allowFallbackToNative = false
+                    ).getOrNull()
+                }
+                if (!ytDlpUrl.isNullOrBlank()) {
+                    val resolvedSource = ResolvedStreamSource(
+                        url = ytDlpUrl,
+                        resolver = "yt_dlp",
+                        candidateKey = "YT_DLP",
+                        userAgent = InnerTubeClients.ANDROID_VR.userAgent,
+                        requestHeaders = mapOf("User-Agent" to InnerTubeClients.ANDROID_VR.userAgent)
+                    )
+                    streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
+                    streamUrlCache[videoId] = Pair(System.currentTimeMillis(), ytDlpUrl)
+                    return@withContext resolvedSource
+                }
             } catch (e: Exception) {
-                logger?.warn("online", "resolver_attempt_failed", context = mapOf(
-                    "videoId" to videoId,
-                    "resolver" to "inner_tube",
-                    "attempt" to attempt + 1,
-                    "client" to clientConfig.clientName,
-                    "failureClass" to OnlinePlaybackPolicy.classifyResolverFailure(e)
-                ), throwable = e)
+                logger?.warn("online", "yt_dlp_stream_fallback_failed", context = mapOf("videoId" to videoId), throwable = e)
             }
         }
 
-        // 2. Pure-Kotlin WEB_REMIX with signature deciphering fallback
-        try {
-            val webConfig = InnerTubeClients.WEB_REMIX
-            val clientJson = JSONObject().apply {
-                put("clientName", webConfig.clientName)
-                put("clientVersion", webConfig.clientVersion)
-                put("hl", "en")
-                put("gl", "US")
-                if (!visitorData.isNullOrBlank()) {
-                    put("visitorData", visitorData)
-                }
-            }
-            val requestBodyJson = JSONObject().apply {
-                put("context", JSONObject().apply {
-                    put("client", clientJson)
-                })
-                put("videoId", videoId)
-                put("contentCheckOk", true)
-                put("racyCheckOk", true)
-            }
-            val reqBuilder = Request.Builder()
-                .url("https://music.youtube.com/youtubei/v1/player?prettyPrint=false")
-                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
-                .header("User-Agent", webConfig.userAgent)
-                .header("Content-Type", "application/json")
-                .header("Origin", "https://music.youtube.com")
-                .header("Referer", "https://music.youtube.com/")
-                .header("X-YouTube-Client-Name", "67")
-                .header("X-YouTube-Client-Version", webConfig.clientVersion)
-
-            authManager?.let { auth ->
-                if (auth.connection.value.isConnected) {
-                    auth.cookieHeaderValue()?.let {
-                        reqBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
-                    }
-                    auth.authorizationHeaderValue()?.let {
-                        reqBuilder.header("Authorization", it)
-                    }
-                }
-            }
-
-            executeWithRetry(reqBuilder.build(), maxRetries = 1).use { resp ->
-                val bodyStr = resp.body?.string().orEmpty()
-                if (resp.isSuccessful && bodyStr.isNotEmpty()) {
-                    val json = JSONObject(bodyStr)
-                    val extractedUrl = InnerTubeParser.parsePlayerResponse(json, client)
-                    if (!extractedUrl.isNullOrBlank()) {
-                        val resolvedSource = ResolvedStreamSource(
-                            url = extractedUrl,
-                            resolver = "inner_tube_remix",
-                            candidateKey = "WEB_REMIX",
-                            userAgent = webConfig.userAgent,
-                            requestHeaders = mapOf(
-                                "User-Agent" to webConfig.userAgent,
-                                "Origin" to "https://music.youtube.com",
-                                "Referer" to "https://music.youtube.com/"
-                            )
-                        )
-                        streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), resolvedSource)
-                        streamUrlCache[videoId] = Pair(System.currentTimeMillis(), extractedUrl)
-                        return@withContext resolvedSource
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger?.warn("online", "web_remix_fallback_failed", context = mapOf("videoId" to videoId), throwable = e)
+        // 3. HLS manifest fallback if no direct progressive stream was available
+        hlsFallbacks.firstOrNull()?.let { hlsSource ->
+            streamResolutionCache[videoId] = Pair(System.currentTimeMillis(), hlsSource)
+            streamUrlCache[videoId] = Pair(System.currentTimeMillis(), hlsSource.url)
+            return@withContext hlsSource
         }
 
-        throw java.io.IOException("All extraction attempts and fallback clients were exhausted for videoId: $videoId")
+        throw IOException("All extraction attempts and fallback clients were exhausted for videoId: $videoId")
     }
 
     suspend fun parseAudioUrl(formats: JSONArray): String? {
@@ -926,16 +1138,10 @@ open class InnerTubeRepository(context: Context? = null) {
             }
         }
 
-        if (startIndex == -1) {
-            android.util.Log.w("InnerTubeRepository", "Scraped HTML structure warning: 'ytInitialData' variable not found in page. YouTube structure might have changed.")
-            return null
-        }
+        if (startIndex == -1) return null
 
         val jsonStart = html.indexOf("{", startIndex + selectedPrefix.length)
-        if (jsonStart == -1) {
-            android.util.Log.w("InnerTubeRepository", "Scraped HTML structure error: Initial JSON brace '{' not found after prefix '$selectedPrefix'.")
-            return null
-        }
+        if (jsonStart == -1) return null
 
         var braceCount = 0
         var inString = false
@@ -965,8 +1171,6 @@ open class InnerTubeRepository(context: Context? = null) {
                 }
             }
         }
-
-        android.util.Log.w("InnerTubeRepository", "Scraped HTML brace parsing warning: Could not find matching closing brace.")
         return null
     }
 
@@ -974,7 +1178,7 @@ open class InnerTubeRepository(context: Context? = null) {
         return try {
             val tracks = searchTracks("Top Global Hits Music 2026")
             if (tracks.isNotEmpty()) {
-                tracks.take(15)
+                tracks.take(20)
             } else {
                 emptyList()
             }
@@ -996,11 +1200,9 @@ open class InnerTubeRepository(context: Context? = null) {
 
             if (!apiKey.isNullOrBlank()) {
                 scrapedApiKey = apiKey
-                android.util.Log.d("InnerTubeRepository", "Successfully refreshed INNERTUBE_API_KEY")
             }
             if (!clientVersion.isNullOrBlank()) {
                 scrapedClientVersion = clientVersion
-                android.util.Log.d("InnerTubeRepository", "Successfully refreshed clientVersion: $clientVersion")
             }
 
             if (!apiKey.isNullOrBlank() || !clientVersion.isNullOrBlank()) {
@@ -1043,52 +1245,48 @@ open class InnerTubeRepository(context: Context? = null) {
         val contextJson = JSONObject().apply {
             put("client", JSONObject().apply {
                 put("clientName", "WEB_REMIX")
-                put("clientVersion", "1.20260707.12.00")
+                put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
                 put("hl", "en")
                 put("gl", "US")
             })
         }
-        val bodyJson = JSONObject().apply {
-            put("context", contextJson)
-        }
 
         val requestBuilder = Request.Builder()
             .url(url)
-            .post(bodyJson.toString().toRequestBody(jsonMediaType))
             .header("Content-Type", "application/json")
             .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
             .header("Origin", "https://music.youtube.com")
             .header("Referer", "https://music.youtube.com/")
             .header("X-YouTube-Client-Name", "67")
-            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+            .header("X-YouTube-Client-Version", InnerTubeClients.WEB_REMIX.clientVersion)
 
-        auth.cookieHeaderValue()?.let {
-            requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+        applyAuthHeaders(requestBuilder, contextJson, origin = "https://music.youtube.com")
+
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
         }
-        auth.authorizationHeaderValue()?.let {
-            requestBuilder.header("Authorization", it)
-        }
+        requestBuilder.post(bodyJson.toString().toRequestBody(jsonMediaType))
 
         try {
-            val response = client.newCall(requestBuilder.build()).execute()
-            if (!response.isSuccessful) {
-                // Auto-refresh cookies on 401/403
-                if ((response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
-                    return@withContext fetchAccountInfo()
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful) {
+                    if ((response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
+                        return@withContext fetchAccountInfo()
+                    }
+                    return@withContext null
                 }
-                return@withContext null
+                val responseBody = response.body?.string() ?: return@withContext null
+                val root = JSONObject(responseBody)
+                val header = findObjectRecursively(root, "activeAccountHeaderRenderer") ?: return@withContext null
+                val accountName = header.optJSONObject("accountName")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.trim().orEmpty()
+                val handle = header.optJSONObject("channelHandle")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.trim()
+                val photoUrl = header.optJSONObject("accountPhoto")?.optJSONObject("thumbnails")?.optJSONArray("thumbnails")?.let { thumbs ->
+                    thumbs.optJSONObject(thumbs.length() - 1)?.optString("url")
+                }
+                if (accountName.isNotBlank()) {
+                    YtAccountInfo(accountName, handle, photoUrl)
+                } else null
             }
-            val responseBody = response.body?.string() ?: return@withContext null
-            val root = JSONObject(responseBody)
-            val header = findObjectRecursively(root, "activeAccountHeaderRenderer") ?: return@withContext null
-            val accountName = header.optJSONObject("accountName")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.trim().orEmpty()
-            val handle = header.optJSONObject("channelHandle")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")?.trim()
-            val photoUrl = header.optJSONObject("accountPhoto")?.optJSONObject("thumbnails")?.optJSONArray("thumbnails")?.let { thumbs ->
-                thumbs.optJSONObject(thumbs.length() - 1)?.optString("url")
-            }
-            if (accountName.isNotBlank()) {
-                YtAccountInfo(accountName, handle, photoUrl)
-            } else null
         } catch (e: Exception) {
             logger?.warn("online", "fetch_account_info_failed", throwable = e)
             null
@@ -1117,43 +1315,40 @@ open class InnerTubeRepository(context: Context? = null) {
         val contextJson = JSONObject().apply {
             put("client", JSONObject().apply {
                 put("clientName", "WEB_REMIX")
-                put("clientVersion", "1.20260707.12.00")
+                put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
                 put("hl", "en")
                 put("gl", "US")
             })
         }
-        val bodyJson = JSONObject().apply {
-            put("context", contextJson)
-            put("browseId", "FEmusic_liked_playlists")
-        }
 
         val requestBuilder = Request.Builder()
             .url(url)
-            .post(bodyJson.toString().toRequestBody(jsonMediaType))
             .header("Content-Type", "application/json")
             .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
             .header("Origin", "https://music.youtube.com")
             .header("Referer", "https://music.youtube.com/")
             .header("X-YouTube-Client-Name", "67")
-            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+            .header("X-YouTube-Client-Version", InnerTubeClients.WEB_REMIX.clientVersion)
 
-        auth.cookieHeaderValue()?.let {
-            requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
+        applyAuthHeaders(requestBuilder, contextJson, origin = "https://music.youtube.com")
+
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
+            put("browseId", "FEmusic_liked_playlists")
         }
-        auth.authorizationHeaderValue()?.let {
-            requestBuilder.header("Authorization", it)
-        }
+        requestBuilder.post(bodyJson.toString().toRequestBody(jsonMediaType))
 
         try {
-            val response = client.newCall(requestBuilder.build()).execute()
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isNotEmpty()) {
-                    val root = JSONObject(responseBody)
-                    parsePlaylistsRecursively(root, results)
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string().orEmpty()
+                    if (responseBody.isNotEmpty()) {
+                        val root = JSONObject(responseBody)
+                        parsePlaylistsRecursively(root, results)
+                    }
+                } else if ((response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
+                    return@withContext fetchLibraryPlaylists()
                 }
-            } else if ((response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
-                return@withContext fetchLibraryPlaylists()
             }
         } catch (e: Exception) {
             logger?.warn("online", "fetch_library_playlists_failed", throwable = e)
@@ -1168,49 +1363,45 @@ open class InnerTubeRepository(context: Context? = null) {
         val contextJson = JSONObject().apply {
             put("client", JSONObject().apply {
                 put("clientName", "WEB_REMIX")
-                put("clientVersion", "1.20260707.12.00")
+                put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
                 put("hl", "en")
                 put("gl", "US")
             })
         }
-        val targetBrowseId = if (browseId == "LM" || browseId == "FEmusic_liked_videos") "VLLM" else browseId
-        val bodyJson = JSONObject().apply {
-            put("context", contextJson)
-            put("browseId", targetBrowseId)
-        }
 
         val requestBuilder = Request.Builder()
             .url(url)
-            .post(bodyJson.toString().toRequestBody(jsonMediaType))
             .header("Content-Type", "application/json")
             .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
             .header("Origin", "https://music.youtube.com")
             .header("Referer", "https://music.youtube.com/")
             .header("X-YouTube-Client-Name", "67")
-            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+            .header("X-YouTube-Client-Version", InnerTubeClients.WEB_REMIX.clientVersion)
 
-        auth?.let { a ->
-            if (a.connection.value.isConnected) {
-                a.cookieHeaderValue()?.let {
-                    requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
-                }
-                a.authorizationHeaderValue()?.let {
-                    requestBuilder.header("Authorization", it)
-                }
-            }
+        applyAuthHeaders(requestBuilder, contextJson, origin = "https://music.youtube.com")
+
+        val targetBrowseId = when {
+            browseId == "LM" || browseId == "FEmusic_liked_videos" -> "VLLM"
+            else -> browseId
         }
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
+            put("browseId", targetBrowseId)
+        }
+        requestBuilder.post(bodyJson.toString().toRequestBody(jsonMediaType))
 
         try {
-            val response = client.newCall(requestBuilder.build()).execute()
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isNotEmpty()) {
-                    val root = JSONObject(responseBody)
-                    val tracks = parseTracksFromBrowse(root)
-                    if (tracks.isNotEmpty()) return@withContext tracks
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string().orEmpty()
+                    if (responseBody.isNotEmpty()) {
+                        val root = JSONObject(responseBody)
+                        val tracks = parseTracksFromBrowse(root)
+                        if (tracks.isNotEmpty()) return@withContext tracks
+                    }
+                } else if (auth != null && (response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
+                    return@withContext fetchPlaylistTracks(browseId)
                 }
-            } else if (auth != null && (response.code == 401 || response.code == 403) && auth.refreshCookiesFromCookieManager()) {
-                return@withContext fetchPlaylistTracks(browseId)
             }
         } catch (e: Exception) {
             logger?.warn("online", "fetch_playlist_tracks_failed", context = mapOf("browseId" to browseId), throwable = e)
@@ -1226,50 +1417,42 @@ open class InnerTubeRepository(context: Context? = null) {
 
     /** Fetches online recommendations and personalized home feed (FEmusic_home). */
     suspend fun fetchHomeFeed(): List<InnerTubeTrack> = withContext(Dispatchers.IO) {
-        val auth = authManager
         val url = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false"
         val contextJson = JSONObject().apply {
             put("client", JSONObject().apply {
                 put("clientName", "WEB_REMIX")
-                put("clientVersion", "1.20260707.12.00")
+                put("clientVersion", InnerTubeClients.WEB_REMIX.clientVersion)
                 put("hl", "en")
                 put("gl", "US")
             })
         }
-        val bodyJson = JSONObject().apply {
-            put("context", contextJson)
-            put("browseId", "FEmusic_home")
-        }
 
         val requestBuilder = Request.Builder()
             .url(url)
-            .post(bodyJson.toString().toRequestBody(jsonMediaType))
             .header("Content-Type", "application/json")
             .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
             .header("Origin", "https://music.youtube.com")
             .header("Referer", "https://music.youtube.com/")
             .header("X-YouTube-Client-Name", "67")
-            .header("X-YouTube-Client-Version", "1.20260707.12.00")
+            .header("X-YouTube-Client-Version", InnerTubeClients.WEB_REMIX.clientVersion)
 
-        auth?.let { a ->
-            if (a.connection.value.isConnected) {
-                a.cookieHeaderValue()?.let {
-                    requestBuilder.header("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+100; SOCS=CAISEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; $it")
-                }
-                a.authorizationHeaderValue()?.let {
-                    requestBuilder.header("Authorization", it)
-                }
-            }
+        applyAuthHeaders(requestBuilder, contextJson, origin = "https://music.youtube.com")
+
+        val bodyJson = JSONObject().apply {
+            put("context", contextJson)
+            put("browseId", "FEmusic_home")
         }
+        requestBuilder.post(bodyJson.toString().toRequestBody(jsonMediaType))
 
         try {
-            val response = client.newCall(requestBuilder.build()).execute()
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isNotEmpty()) {
-                    val root = JSONObject(responseBody)
-                    val tracks = parseTracksFromBrowse(root)
-                    if (tracks.isNotEmpty()) return@withContext tracks
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string().orEmpty()
+                    if (responseBody.isNotEmpty()) {
+                        val root = JSONObject(responseBody)
+                        val tracks = parseTracksFromBrowse(root)
+                        if (tracks.isNotEmpty()) return@withContext tracks
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -1356,23 +1539,30 @@ open class InnerTubeRepository(context: Context? = null) {
     private fun parseTracksFromBrowse(root: JSONObject): List<InnerTubeTrack> {
         val results = mutableListOf<JSONObject>()
         collectObjectsRecursively(root, "musicResponsiveListItemRenderer", results)
+        collectObjectsRecursively(root, "musicTwoRowItemRenderer", results)
         return results.mapNotNull { renderer ->
             val videoId = InnerTubeParser.extractVideoId(renderer).takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            val title = InnerTubeParser.extractText(renderer, "title") ?: "Unknown Title"
+            val title = InnerTubeParser.extractText(renderer, "title")
+                ?: renderer.optJSONArray("flexColumns")?.optJSONObject(0)
+                    ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
+                    ?.optJSONObject("text")?.let { InnerTubeParser.extractTextFromObj(it) }
+                ?: return@mapNotNull null
             val artist = InnerTubeParser.extractText(renderer, "subtitle")
                 ?: renderer.optJSONArray("flexColumns")?.optJSONObject(1)
                     ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
                     ?.optJSONObject("text")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text")
                 ?: "YouTube Music"
-            val durationText = renderer.optJSONObject("fixedColumns")?.optJSONObject("musicResponsiveListItemFixedColumnRenderer")
-                ?.optJSONObject("text")?.optJSONArray("runs")?.optJSONObject(0)?.optString("text") ?: "3:30"
+            val durationText = renderer.optJSONArray("fixedColumns")?.optJSONObject(0)
+                ?.optJSONObject("musicResponsiveListItemFixedColumnRenderer")
+                ?.optJSONObject("text")?.let { InnerTubeParser.extractTextFromObj(it) }
+                ?: "3:30"
             val thumb = InnerTubeParser.extractThumbnail(renderer) ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
             InnerTubeTrack(
                 id = videoId,
                 title = title,
                 artist = artist,
                 durationText = durationText,
-                thumbnailUrl = thumb
+                thumbnailUrl = InnerTubeParser.getHighResThumbnail(thumb, videoId)
             )
         }.distinctBy { it.id }
     }

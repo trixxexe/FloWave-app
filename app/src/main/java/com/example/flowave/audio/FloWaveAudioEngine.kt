@@ -90,6 +90,7 @@ class FloWaveAudioEngine(private val context: Context) {
 
     private var exoPlayer: ExoPlayer? = null
     val player: ExoPlayer? get() = exoPlayer
+    private var dataSourceFactory: FloWaveDataSourceFactory? = null
     private var equalizer: Equalizer? = null
     private var bassBoost: BassBoost? = null
     private var virtualizer: Virtualizer? = null
@@ -282,8 +283,11 @@ class FloWaveAudioEngine(private val context: Context) {
             .build()
 
         val customDataSourceFactory = FloWaveDataSourceFactory(context)
-        val loadErrorHandlingPolicy = androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(1)
-        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
+        dataSourceFactory = customDataSourceFactory
+        val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+        val loadErrorHandlingPolicy = androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(2)
+        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context, extractorsFactory)
             .setDataSourceFactory(customDataSourceFactory)
             .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
 
@@ -705,9 +709,9 @@ class FloWaveAudioEngine(private val context: Context) {
             .setMediaId(track.id)
             .setMediaMetadata(metadataBuilder.build())
 
-        // For online tracks using the custom flowave:// scheme, Media3 cannot
-        // infer the content type from the URI alone. Setting a MIME type hint
-        // For online tracks, check if resolved stream is HLS manifest (.m3u8), DASH (.mpd), or progressive MP4/WebM
+        // Only set an explicit manifest MIME type when the resolved stream is HLS (.m3u8) or DASH (.mpd).
+        // For progressive audio streams (Opus/WebM itag 251 or M4A/AAC itag 140), leave mimeType unset
+        // so Media3's DefaultExtractorsFactory sniffs MatroskaExtractor or Mp4Extractor from stream bytes.
         if (track.isOnline) {
             val sourceId = PlaybackIdentity.sourceId(track)
             val cached = sourceId?.let { innerTubeRepo.getCachedResolution(it) }
@@ -716,8 +720,6 @@ class FloWaveAudioEngine(private val context: Context) {
                 builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
             } else if (url.contains(".mpd") || url.contains("manifest/dash")) {
                 builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
-            } else {
-                builder.setMimeType(androidx.media3.common.MimeTypes.AUDIO_MP4)
             }
         }
 
@@ -791,22 +793,98 @@ class FloWaveAudioEngine(private val context: Context) {
         player.playWhenReady = resume
     }
 
-    /** Starts an online result; the stream is resolved lazily by Media3 or pre-warmed on Dispatchers.IO. */
+    /** Starts an online track immediately with buffering feedback and background radio queue continuation. */
     suspend fun playOnlineTrack(track: com.example.flowave.data.model.InnerTubeTrack) {
         logger.info("online", "play_requested", context = mapOf("videoId" to track.id))
+        dataSourceFactory?.resetAttempts(track.id)
+        val onlineTrack = innerTubeRepo.createOnlineTrack(track)
+        trackRetryCount.remove(onlineTrack.id)
+
+        withContext(Dispatchers.Main) {
+            _playbackState.value = _playbackState.value.copy(
+                currentTrack = onlineTrack,
+                isBuffering = true,
+                errorMessage = null
+            )
+        }
+
         withContext(Dispatchers.IO) {
             runCatching { innerTubeRepo.getStreamResolution(track.id) }
         }
-        playTrack(innerTubeRepo.createOnlineTrack(track))
+
+        val updatedOnlineTrack = innerTubeRepo.createOnlineTrack(track)
+        withContext(Dispatchers.Main) {
+            playTrack(updatedOnlineTrack)
+        }
+
+        // Fetch related YouTube Music radio queue in the background so playback continues seamlessly
+        scope.launch(Dispatchers.IO) {
+            val radioTracks = runCatching { innerTubeRepo.fetchRadioQueue(track.id) }.getOrDefault(emptyList())
+            if (radioTracks.isNotEmpty()) {
+                withContext(Dispatchers.Main) {
+                    val currentState = _playbackState.value
+                    if (currentState.currentTrack?.id == updatedOnlineTrack.id && currentState.queue.size <= 3) {
+                        val existingIds = currentState.queue.map { it.id }.toSet()
+                        val newTracks = radioTracks
+                            .map { innerTubeRepo.createOnlineTrack(it) }
+                            .map(::canonicalTrack)
+                            .filter { it.id !in existingIds }
+                            .take(15)
+                        if (newTracks.isNotEmpty()) {
+                            val updatedQueue = currentState.queue + newTracks
+                            _playbackState.value = currentState.copy(queue = updatedQueue)
+                            val mediaItems = newTracks.mapNotNull(::createMediaItem)
+                            exoPlayer?.addMediaItems(mediaItems)
+                            persistQueueAndState()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Plays a list of online tracks (e.g., from a playlist, search, or home shelf) starting at startIndex. */
+    suspend fun playOnlineQueue(
+        tracks: List<com.example.flowave.data.model.InnerTubeTrack>,
+        startIndex: Int = 0
+    ) {
+        if (tracks.isEmpty()) return
+        val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
+        val selected = tracks[safeIndex]
+        dataSourceFactory?.clearAllAttempts()
+        trackRetryCount.clear()
+        val mappedQueue = tracks.map { innerTubeRepo.createOnlineTrack(it) }
+
+        withContext(Dispatchers.Main) {
+            _playbackState.value = _playbackState.value.copy(
+                currentTrack = mappedQueue[safeIndex],
+                isBuffering = true,
+                errorMessage = null
+            )
+        }
+
+        withContext(Dispatchers.IO) {
+            runCatching { innerTubeRepo.getStreamResolution(selected.id) }
+        }
+
+        val refreshedQueue = tracks.map { innerTubeRepo.createOnlineTrack(it) }
+        withContext(Dispatchers.Main) {
+            setQueueAndPlay(refreshedQueue, safeIndex)
+        }
     }
 
     fun playTrack(track: Track) {
         logger.info("player", "track_requested", context = mapOf("trackId" to track.id, "source" to track.source))
         val normalizedTrack = canonicalTrack(track)
+        PlaybackIdentity.sourceId(normalizedTrack)?.let { dataSourceFactory?.resetAttempts(it) }
+        trackRetryCount.remove(normalizedTrack.id)
         val currentQueue = _playbackState.value.queue.toMutableList()
         val index = currentQueue.indexOfFirst { it.id == normalizedTrack.id }
         if (index >= 0) {
-            if (index == _playbackState.value.currentQueueIndex && _playbackState.value.currentTrack?.id == normalizedTrack.id) {
+            if (index == _playbackState.value.currentQueueIndex &&
+                _playbackState.value.currentTrack?.id == normalizedTrack.id &&
+                exoPlayer?.playbackState != Player.STATE_IDLE
+            ) {
                 logger.debug("player", "track_selection_idempotent", context = mapOf(
                     "trackId" to normalizedTrack.id,
                     "source" to normalizedTrack.source,
@@ -828,6 +906,9 @@ class FloWaveAudioEngine(private val context: Context) {
         if (player.isPlaying) {
             player.pause()
         } else {
+            if (player.playbackState == Player.STATE_IDLE) {
+                player.prepare()
+            }
             player.play()
         }
     }
@@ -836,12 +917,14 @@ class FloWaveAudioEngine(private val context: Context) {
         logger.info("player", "retry_requested", context = mapOf("trackId" to _playbackState.value.currentTrack?.id))
         val track = _playbackState.value.currentTrack ?: return
         val player = exoPlayer ?: return
+        trackRetryCount.remove(track.id)
         if (track.isOnline) {
             val sourceId = PlaybackIdentity.sourceId(track) ?: return
+            dataSourceFactory?.resetAttempts(sourceId)
             innerTubeRepo.invalidateStreamUrl(sourceId)
             FloWaveCacheManager.invalidate(sourceId)
         }
-        _playbackState.value = _playbackState.value.copy(errorMessage = null)
+        _playbackState.value = _playbackState.value.copy(errorMessage = null, isBuffering = true)
         player.prepare()
         player.play()
     }

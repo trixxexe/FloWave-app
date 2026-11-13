@@ -1,6 +1,7 @@
 package com.example.flowave.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -24,13 +24,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.flowave.audio.FloWaveAudioEngine
 import com.example.flowave.data.model.LrcLine
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.flowave.ui.components.CanvasVisualizer
 import com.example.flowave.ui.components.DynamicAudioDeviceSelectorPill
-import com.example.flowave.ui.components.GlassCard
 import com.example.flowave.ui.components.VisualizerType
 import com.example.flowave.ui.theme.*
 import com.example.flowave.utils.SettingsSchema
@@ -48,7 +47,7 @@ fun PlayerScreen(
     val visualizerWaveform by audioEngine.visualizerWaveform.collectAsStateWithLifecycle()
     val track = playbackState.currentTrack
 
-    var activeTab by remember { mutableStateOf(0) } // 0: Player, 1: Karaoke Lyrics, 2: Queue
+    var activeTab by remember { mutableIntStateOf(0) } // 0: Art/Visualizer, 1: Lyrics, 2: Queue
     var selectedVisualizerType by remember { mutableStateOf(VisualizerType.BARS) }
     var showSpeedDialog by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
@@ -56,7 +55,12 @@ fun PlayerScreen(
     val lazyListState = rememberLazyListState()
 
     if (track == null) {
-        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(PureBlack),
+            contentAlignment = Alignment.Center
+        ) {
             Text("No track selected", color = TextSecondary)
         }
         return
@@ -65,111 +69,125 @@ fun PlayerScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(PureBlack)
     ) {
-        // Blurred Album Art Background Layer
-        AsyncImage(
-            model = track.artworkUri ?: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=600",
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.85f))
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = 0.60f),
-                            DarkBackground.copy(alpha = 0.95f),
-                            DarkBackground
-                        )
-                    )
-                )
-        )
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .systemBarsPadding()
-                .padding(16.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
-            // Header Bar
+            // Minimalist Top Bar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onCloseClick, modifier = Modifier.testTag("player_close_btn")) {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Close", tint = TextPrimary)
-                }
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                IconButton(
+                    onClick = onCloseClick,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(DarkSurface)
+                        .border(1.dp, GlassBorder, CircleShape)
+                        .testTag("player_close_btn")
                 ) {
-                    FilterChip(
-                        selected = activeTab == 0,
-                        onClick = { activeTab = 0 },
-                        label = { Text("Visualizer", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CyanNeon,
-                            selectedLabelColor = PureBlack
-                        )
-                    )
-                    FilterChip(
-                        selected = activeTab == 1,
-                        onClick = { activeTab = 1 },
-                        label = { Text("LRC Lyrics", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CyanNeon,
-                            selectedLabelColor = PureBlack
-                        )
-                    )
-                    FilterChip(
-                        selected = activeTab == 2,
-                        onClick = { activeTab = 2 },
-                        label = { Text("Queue (${playbackState.queue.size})", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CyanNeon,
-                            selectedLabelColor = PureBlack
-                        )
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Close",
+                        tint = TextPrimary
                     )
                 }
 
-                Row {
-                    IconButton(onClick = { showSleepTimerDialog = true }) {
+                // Segmented Mode Pills
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(DarkSurface)
+                        .border(1.dp, GlassBorder, RoundedCornerShape(100.dp))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    listOf(
+                        0 to "Player",
+                        1 to "Lyrics",
+                        2 to "Queue (${playbackState.queue.size})"
+                    ).forEach { (idx, label) ->
+                        val selected = activeTab == idx
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(100.dp))
+                                .background(if (selected) CyanNeon else Color.Transparent)
+                                .clickable { activeTab = idx }
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) PureBlack else TextSecondary
+                            )
+                        }
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(
+                        onClick = { showSleepTimerDialog = true },
+                        modifier = Modifier.size(36.dp)
+                    ) {
                         BadgedBox(badge = {
                             if (playbackState.sleepTimerRemainingMs > 0) {
                                 Badge(containerColor = CyanNeon, contentColor = PureBlack) {
-                                    Text("${playbackState.sleepTimerRemainingMs / 60000}m", fontSize = 9.sp)
+                                    Text("${playbackState.sleepTimerRemainingMs / 60000}m", fontSize = 8.sp)
                                 }
                             }
                         }) {
-                            Icon(Icons.Default.Timer, contentDescription = "Sleep Timer", tint = if (playbackState.sleepTimerRemainingMs > 0) CyanNeon else TextPrimary)
+                            Icon(
+                                Icons.Default.Timer,
+                                contentDescription = "Sleep Timer",
+                                tint = if (playbackState.sleepTimerRemainingMs > 0) CyanNeon else TextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
-                    IconButton(onClick = onOpenEqualizerClick, modifier = Modifier.testTag("player_eq_btn")) {
-                        Icon(Icons.Default.Equalizer, contentDescription = "Equalizer", tint = CyanNeon)
+
+                    IconButton(
+                        onClick = onOpenEqualizerClick,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("player_eq_btn")
+                    ) {
+                        Icon(
+                            Icons.Default.Equalizer,
+                            contentDescription = "Equalizer",
+                            tint = CyanNeon,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
+
                     IconButton(
                         onClick = {
                             audioEngine.stopPlayback()
                             onCloseClick()
                         },
-                        modifier = Modifier.testTag("player_stop_btn_top")
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("player_stop_btn_top")
                     ) {
-                        Icon(Icons.Default.Stop, contentDescription = "Stop & Reset App", tint = Color.Red)
+                        Icon(
+                            Icons.Default.Stop,
+                            contentDescription = "Stop",
+                            tint = TextMuted,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Dynamic System Audio Route Selector
+            // Audio output pill
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
@@ -177,80 +195,97 @@ fun PlayerScreen(
                 DynamicAudioDeviceSelectorPill()
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            if (activeTab == 0) {
-                // Main Artwork & Visualizer Section
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // Artwork Glass Card
-                    GlassCard(
+            // Center Content Area
+            when (activeTab) {
+                0 -> {
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth(0.85f)
-                            .aspectRatio(1f),
-                        cornerRadius = 28.dp
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
                     ) {
-                        AsyncImage(
-                            model = track.artworkUri ?: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=600",
-                            contentDescription = "Artwork",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    // Audio Visualizer Canvas Layer Overlay
-                    if (SettingsSchema.getBoolean(settingsJson, "show_visualizer")) {
-                        CanvasVisualizer(
-                            waveform = visualizerWaveform,
-                            type = selectedVisualizerType,
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(180.dp)
-                                .align(Alignment.BottomCenter)
-                        )
-                    }
-                }
-
-                // Visualizer Mode Selector Row
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    VisualizerType.entries.forEach { type ->
-                        IconButton(
-                            onClick = { selectedVisualizerType = type },
-                            modifier = Modifier.padding(horizontal = 4.dp)
+                                .fillMaxWidth(0.84f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(DarkSurface)
+                                .border(1.dp, GlassBorderWhite, RoundedCornerShape(24.dp)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = type.name.take(3),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (selectedVisualizerType == type) CyanNeon else TextMuted
+                            if (!track.artworkUri.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = track.artworkUri,
+                                    contentDescription = "Artwork",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    tint = CyanNeon,
+                                    modifier = Modifier.size(64.dp)
+                                )
+                            }
+                        }
+
+                        if (SettingsSchema.getBoolean(settingsJson, "show_visualizer")) {
+                            CanvasVisualizer(
+                                waveform = visualizerWaveform,
+                                type = selectedVisualizerType,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp)
+                                    .align(Alignment.BottomCenter)
                             )
                         }
                     }
+
+                    if (SettingsSchema.getBoolean(settingsJson, "show_visualizer")) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            VisualizerType.entries.forEach { type ->
+                                val selected = selectedVisualizerType == type
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 3.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (selected) CyanNeon.copy(alpha = 0.16f) else Color.Transparent)
+                                        .clickable { selectedVisualizerType = type }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = type.name.take(4),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (selected) CyanNeon else TextMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
-            } else if (activeTab == 1) {
-                // Synced LRC Karaoke Lyrics Section
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
-                    GlassCard(
-                        modifier = Modifier.fillMaxSize(),
-                        cornerRadius = 24.dp
+
+                1 -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(DarkSurface)
+                            .border(1.dp, GlassBorder, RoundedCornerShape(20.dp))
                     ) {
                         if (lrcLines.isEmpty()) {
                             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("No synced LRC lyrics found", color = TextMuted)
+                                Text("No synced lyrics available for this track", color = TextMuted, fontSize = 14.sp)
                             }
                         } else {
                             val currentPos = playbackState.currentPositionMs
@@ -264,88 +299,124 @@ fun PlayerScreen(
                                 state = lazyListState,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(16.dp),
+                                    .padding(20.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                                verticalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 itemsIndexed(lrcLines) { index, line ->
                                     val isActive = index == activeIndex
                                     Text(
                                         text = line.text,
-                                        fontSize = if (isActive) 22.sp else 16.sp,
+                                        fontSize = if (isActive) 20.sp else 15.sp,
                                         fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                                         color = if (isActive) CyanNeon else TextMuted,
                                         textAlign = TextAlign.Center,
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { audioEngine.seekTo(line.timestampMs) }
                                     )
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                // Queue Management Drawer
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
-                    GlassCard(
-                        modifier = Modifier.fillMaxSize(),
-                        cornerRadius = 24.dp
+
+                else -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(DarkSurface)
+                            .border(1.dp, GlassBorder, RoundedCornerShape(20.dp))
                     ) {
-                        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(14.dp)
+                        ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Up Next (${playbackState.queue.size})", color = TextPrimary, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "Up Next (${playbackState.queue.size})",
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 15.sp
+                                )
                                 TextButton(onClick = { audioEngine.clearQueue() }) {
-                                    Text("Clear All", color = Color.Red, fontSize = 12.sp)
+                                    Text("Clear", color = ErrorCrimson, fontSize = 12.sp)
                                 }
                             }
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 itemsIndexed(playbackState.queue) { idx, item ->
                                     val isCurrent = idx == playbackState.currentQueueIndex
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(if (isCurrent) CyanNeon.copy(alpha = 0.15f) else Color.Transparent)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (isCurrent) CyanNeon.copy(alpha = 0.12f) else Color.Transparent)
                                             .clickable { audioEngine.setQueueAndPlay(playbackState.queue, idx) }
-                                            .padding(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 item.title,
                                                 color = if (isCurrent) CyanNeon else TextPrimary,
-                                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
                                                 fontSize = 14.sp,
-                                                maxLines = 1
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
-                                            Text(item.artist, color = TextMuted, fontSize = 12.sp, maxLines = 1)
+                                            Text(
+                                                item.artist,
+                                                color = TextMuted,
+                                                fontSize = 12.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
                                         Row {
                                             IconButton(
                                                 onClick = { if (idx > 0) audioEngine.reorderQueue(idx, idx - 1) },
-                                                enabled = idx > 0
+                                                enabled = idx > 0,
+                                                modifier = Modifier.size(32.dp)
                                             ) {
-                                                Icon(Icons.Default.KeyboardArrowUp, "Move up", tint = if (idx > 0) CyanNeon else TextMuted, modifier = Modifier.size(20.dp))
+                                                Icon(
+                                                    Icons.Default.KeyboardArrowUp,
+                                                    contentDescription = "Move up",
+                                                    tint = if (idx > 0) TextSecondary else TextMuted.copy(alpha = 0.4f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
                                             }
                                             IconButton(
                                                 onClick = { if (idx < playbackState.queue.lastIndex) audioEngine.reorderQueue(idx, idx + 1) },
-                                                enabled = idx < playbackState.queue.lastIndex
+                                                enabled = idx < playbackState.queue.lastIndex,
+                                                modifier = Modifier.size(32.dp)
                                             ) {
-                                                Icon(Icons.Default.KeyboardArrowDown, "Move down", tint = if (idx < playbackState.queue.lastIndex) CyanNeon else TextMuted, modifier = Modifier.size(20.dp))
+                                                Icon(
+                                                    Icons.Default.KeyboardArrowDown,
+                                                    contentDescription = "Move down",
+                                                    tint = if (idx < playbackState.queue.lastIndex) TextSecondary else TextMuted.copy(alpha = 0.4f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
                                             }
-                                            IconButton(onClick = { audioEngine.removeFromQueue(idx) }) {
-                                                Icon(Icons.Default.Delete, contentDescription = "Remove", tint = TextMuted, modifier = Modifier.size(20.dp))
+                                            IconButton(
+                                                onClick = { audioEngine.removeFromQueue(idx) },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "Remove",
+                                                    tint = TextMuted,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
                                             }
                                         }
                                     }
@@ -356,9 +427,9 @@ fun PlayerScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Track Details Info & Audio Format Badge
+            // Track Metadata & Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -373,27 +444,31 @@ fun PlayerScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = track.artist,
+                            color = TextSecondary,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = CyanNeon.copy(alpha = 0.2f),
-                            modifier = Modifier.padding(vertical = 2.dp)
+                            shape = RoundedCornerShape(6.dp),
+                            color = DarkSurface,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, GlassBorder)
                         ) {
                             Text(
                                 text = playbackState.audioFormatInfo,
                                 color = CyanNeon,
                                 fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Medium,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
-                        Text(
-                            text = "${track.artist} • ${track.album}",
-                            color = TextSecondary,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
 
@@ -406,25 +481,30 @@ fun PlayerScreen(
                         )
                     }
                     IconButton(onClick = { showSpeedDialog = true }) {
-                        Icon(Icons.Default.Speed, contentDescription = "Speed", tint = CyanNeon)
+                        Icon(
+                            Icons.Default.Speed,
+                            contentDescription = "Speed",
+                            tint = if (playbackState.playbackSpeed != 1.0f || playbackState.pitch != 1.0f) CyanNeon else TextSecondary
+                        )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Seekbar Slider & Timestamps
+            // Seekbar & Timestamps
             val posMs = playbackState.currentPositionMs
             val durMs = playbackState.durationMs.coerceAtLeast(1L)
             var sliderPos by remember { mutableFloatStateOf(0f) }
             var isUserSeeking by remember { mutableStateOf(false) }
-
             val currentProgress = if (isUserSeeking) sliderPos else (posMs.toFloat() / durMs.toFloat()).coerceIn(0f, 1f)
 
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (playbackState.isBuffering) {
                     LinearProgressIndicator(
-                        modifier = Modifier.fillMaxWidth().height(3.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp),
                         color = CyanNeon,
                         trackColor = Color.Transparent
                     )
@@ -442,7 +522,7 @@ fun PlayerScreen(
                     colors = SliderDefaults.colors(
                         thumbColor = CyanNeon,
                         activeTrackColor = CyanNeon,
-                        inactiveTrackColor = Color(0x33FFFFFF)
+                        inactiveTrackColor = GlassBorderWhite
                     ),
                     modifier = Modifier.testTag("player_seekbar")
                 )
@@ -451,67 +531,80 @@ fun PlayerScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(text = formatMs(if (isUserSeeking) (sliderPos * durMs).toLong() else posMs), color = TextMuted, fontSize = 12.sp)
-                    Text(text = formatMs(durMs), color = TextMuted, fontSize = 12.sp)
+                    Text(
+                        text = formatMs(if (isUserSeeking) (sliderPos * durMs).toLong() else posMs),
+                        color = TextMuted,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = formatMs(durMs),
+                        color = TextMuted,
+                        fontSize = 11.sp
+                    )
                 }
             }
 
             playbackState.errorMessage?.let {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Playback failed", color = Color(0xFFFF9E9E), fontSize = 12.sp)
+                    Text("Playback failed", color = ErrorCrimson, fontSize = 12.sp)
                     TextButton(onClick = { audioEngine.retryCurrentTrack() }) {
-                        Text("Retry", color = CyanNeon)
+                        Text("Retry", color = CyanNeon, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
 
-            // A-B Loop Controls & Smart Features Row
+            // Minimal A-B Loop & Silence Skip Row
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(onClick = { audioEngine.setPointA() }) {
                     Text(
-                        text = playbackState.pointA?.let { "A: ${formatMs(it)}" } ?: "Set A",
+                        text = playbackState.pointA?.let { "A: ${formatMs(it)}" } ?: "Loop A",
                         color = if (playbackState.pointA != null) CyanNeon else TextMuted,
                         fontSize = 11.sp
                     )
                 }
                 TextButton(onClick = { audioEngine.setPointB() }) {
                     Text(
-                        text = playbackState.pointB?.let { "B: ${formatMs(it)}" } ?: "Set B",
+                        text = playbackState.pointB?.let { "B: ${formatMs(it)}" } ?: "Loop B",
                         color = if (playbackState.pointB != null) CyanNeon else TextMuted,
                         fontSize = 11.sp
                     )
                 }
                 if (playbackState.pointA != null || playbackState.pointB != null) {
                     TextButton(onClick = { audioEngine.clearABLoop() }) {
-                        Text("Clear Loop", color = Color.Red, fontSize = 11.sp)
+                        Text("Clear", color = ErrorCrimson, fontSize = 11.sp)
                     }
                 }
                 TextButton(onClick = { audioEngine.toggleSkipSilence() }) {
                     Text(
-                        text = if (playbackState.skipSilence) "Skip Silence ON" else "Skip Silence OFF",
+                        text = if (playbackState.skipSilence) "Skip Silence: ON" else "Skip Silence: OFF",
                         color = if (playbackState.skipSilence) CyanNeon else TextMuted,
                         fontSize = 11.sp
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Playback Controls Row
+            // Primary Transport Controls
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Shuffle
                 IconButton(onClick = { audioEngine.toggleShuffle() }) {
                     Icon(
                         Icons.Default.Shuffle,
@@ -520,34 +613,54 @@ fun PlayerScreen(
                     )
                 }
 
-                // Previous
-                IconButton(onClick = { audioEngine.playPrevious() }, modifier = Modifier.testTag("player_prev_btn")) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = TextPrimary, modifier = Modifier.size(36.dp))
+                IconButton(
+                    onClick = { audioEngine.playPrevious() },
+                    modifier = Modifier.testTag("player_prev_btn")
+                ) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        contentDescription = "Previous",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(34.dp)
+                    )
                 }
 
-                // Play / Pause FAB
                 FloatingActionButton(
                     onClick = { audioEngine.togglePlayPause() },
                     containerColor = CyanNeon,
                     contentColor = PureBlack,
                     shape = CircleShape,
                     modifier = Modifier
-                        .size(68.dp)
+                        .size(64.dp)
                         .testTag("player_play_pause_fab")
                 ) {
+                    if (playbackState.isBuffering && !playbackState.isPlaying) {
+                        CircularProgressIndicator(
+                            color = PureBlack,
+                            modifier = Modifier.size(26.dp),
+                            strokeWidth = 2.5.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pause",
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = { audioEngine.playNext() },
+                    modifier = Modifier.testTag("player_next_btn")
+                ) {
                     Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = "Play/Pause",
-                        modifier = Modifier.size(38.dp)
+                        Icons.Default.SkipNext,
+                        contentDescription = "Next",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(34.dp)
                     )
                 }
 
-                // Next
-                IconButton(onClick = { audioEngine.playNext() }, modifier = Modifier.testTag("player_next_btn")) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = TextPrimary, modifier = Modifier.size(36.dp))
-                }
-
-                // Stop Button
                 IconButton(
                     onClick = {
                         audioEngine.stopPlayback()
@@ -558,12 +671,11 @@ fun PlayerScreen(
                     Icon(
                         Icons.Default.Stop,
                         contentDescription = "Stop Track",
-                        tint = Color.Red,
-                        modifier = Modifier.size(28.dp)
+                        tint = TextMuted,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
-                // Repeat
                 IconButton(onClick = { audioEngine.toggleRepeatMode() }) {
                     Icon(
                         Icons.Default.Repeat,
@@ -575,25 +687,26 @@ fun PlayerScreen(
         }
     }
 
-    // Speed & Pitch Adjustment Dialog
     if (showSpeedDialog) {
         AlertDialog(
             onDismissRequest = { showSpeedDialog = false },
-            title = { Text("Playback Speed & Pitch", color = TextPrimary) },
+            title = { Text("Speed & Pitch", color = TextPrimary, fontWeight = FontWeight.SemiBold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Speed: ${"%.2f".format(playbackState.playbackSpeed)}x", color = TextSecondary)
                     Slider(
                         value = playbackState.playbackSpeed,
                         onValueChange = { audioEngine.setPlaybackSpeed(it) },
-                        valueRange = 0.5f..2.5f
+                        valueRange = 0.5f..2.5f,
+                        colors = SliderDefaults.colors(thumbColor = CyanNeon, activeTrackColor = CyanNeon)
                     )
 
                     Text("Pitch: ${"%.2f".format(playbackState.pitch)}x", color = TextSecondary)
                     Slider(
                         value = playbackState.pitch,
                         onValueChange = { audioEngine.setPitch(it) },
-                        valueRange = 0.5f..2.0f
+                        valueRange = 0.5f..2.0f,
+                        colors = SliderDefaults.colors(thumbColor = CyanNeon, activeTrackColor = CyanNeon)
                     )
                 }
             },
@@ -602,19 +715,27 @@ fun PlayerScreen(
                     Text("Done", color = CyanNeon)
                 }
             },
-            containerColor = DarkSurface
+            dismissButton = {
+                TextButton(onClick = {
+                    audioEngine.setPlaybackSpeed(1.0f)
+                    audioEngine.setPitch(1.0f)
+                }) {
+                    Text("Reset", color = TextMuted)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(20.dp)
         )
     }
 
-    // Sleep Timer Setup Dialog
     if (showSleepTimerDialog) {
         var selectedMinutes by remember { mutableIntStateOf(15) }
         AlertDialog(
             onDismissRequest = { showSleepTimerDialog = false },
-            title = { Text("Sleep Timer", color = TextPrimary) },
+            title = { Text("Sleep Timer", color = TextPrimary, fontWeight = FontWeight.SemiBold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Turn off audio automatically in:", color = TextSecondary)
+                    Text("Stop playback automatically after:", color = TextSecondary, fontSize = 13.sp)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -633,7 +754,7 @@ fun PlayerScreen(
                     }
                     if (playbackState.sleepTimerRemainingMs > 0) {
                         Text(
-                            "Active timer: ${playbackState.sleepTimerRemainingMs / 1000}s remaining",
+                            "Remaining: ${playbackState.sleepTimerRemainingMs / 1000}s",
                             color = CyanNeon,
                             fontSize = 12.sp
                         )
@@ -645,7 +766,7 @@ fun PlayerScreen(
                     audioEngine.startSleepTimer(selectedMinutes)
                     showSleepTimerDialog = false
                 }) {
-                    Text("Start Timer", color = CyanNeon)
+                    Text("Start", color = CyanNeon)
                 }
             },
             dismissButton = {
@@ -654,11 +775,12 @@ fun PlayerScreen(
                         audioEngine.cancelSleepTimer()
                         showSleepTimerDialog = false
                     }) {
-                        Text("Cancel Timer", color = Color.Red)
+                        Text("Cancel Timer", color = ErrorCrimson)
                     }
                 }
             },
-            containerColor = DarkSurface
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(20.dp)
         )
     }
 }

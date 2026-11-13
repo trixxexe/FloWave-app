@@ -13,7 +13,6 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -22,7 +21,7 @@ private val Context.ytDataStore: DataStore<Preferences> by preferencesDataStore(
 
 /**
  * DataStore-backed persistence for connected YouTube Music account credentials,
- * identity, and playlist cache.
+ * identity, visitorData, dataSyncId, and playlist cache.
  */
 class YtMusicPreferences private constructor(private val context: Context) {
 
@@ -48,7 +47,8 @@ class YtMusicPreferences private constructor(private val context: Context) {
                     connectedAtMillis = prefs[CONNECTED_AT_KEY] ?: 0L,
                     onBehalfOfUser = prefs[ON_BEHALF_OF_USER_KEY]?.takeIf { it.isNotBlank() },
                     authUserIndex = prefs[AUTH_USER_INDEX_KEY],
-                    pageId = prefs[PAGE_ID_KEY].orEmpty()
+                    pageId = prefs[PAGE_ID_KEY].orEmpty(),
+                    visitorData = prefs[VISITOR_DATA_KEY]?.takeIf { it.isNotBlank() }
                 )
             }
         }
@@ -64,7 +64,8 @@ class YtMusicPreferences private constructor(private val context: Context) {
         photoUrl: String?,
         onBehalfOfUser: String? = null,
         authUserIndex: Int? = null,
-        pageId: String = ""
+        pageId: String = "",
+        visitorData: String? = null
     ) {
         withContext(Dispatchers.IO) {
             dataStore.edit { prefs ->
@@ -77,6 +78,7 @@ class YtMusicPreferences private constructor(private val context: Context) {
                 if (!onBehalfOfUser.isNullOrBlank()) prefs[ON_BEHALF_OF_USER_KEY] = onBehalfOfUser else prefs.remove(ON_BEHALF_OF_USER_KEY)
                 if (authUserIndex != null) prefs[AUTH_USER_INDEX_KEY] = authUserIndex else prefs.remove(AUTH_USER_INDEX_KEY)
                 if (pageId.isNotBlank()) prefs[PAGE_ID_KEY] = pageId else prefs.remove(PAGE_ID_KEY)
+                if (!visitorData.isNullOrBlank()) prefs[VISITOR_DATA_KEY] = visitorData else prefs.remove(VISITOR_DATA_KEY)
             }
         }
     }
@@ -92,6 +94,7 @@ class YtMusicPreferences private constructor(private val context: Context) {
                 prefs.remove(ON_BEHALF_OF_USER_KEY)
                 prefs.remove(AUTH_USER_INDEX_KEY)
                 prefs.remove(PAGE_ID_KEY)
+                prefs.remove(VISITOR_DATA_KEY)
                 prefs[SYNC_ENABLED_KEY] = false
             }
         }
@@ -107,6 +110,7 @@ class YtMusicPreferences private constructor(private val context: Context) {
         private val ON_BEHALF_OF_USER_KEY = stringPreferencesKey("ytm_on_behalf_of_user")
         private val AUTH_USER_INDEX_KEY = intPreferencesKey("ytm_auth_user_index")
         private val PAGE_ID_KEY = stringPreferencesKey("ytm_page_id")
+        private val VISITOR_DATA_KEY = stringPreferencesKey("ytm_visitor_data")
 
         @Volatile
         private var instance: YtMusicPreferences? = null

@@ -18,8 +18,9 @@ import java.security.MessageDigest
 import kotlin.coroutines.resume
 
 /**
- * Manages the authenticated YouTube Music session, cookies, and computes the
- * per-request SAPISIDHASH Authorization header required for authenticated InnerTube endpoints.
+ * Manages the authenticated YouTube Music session, cookies, visitorData, dataSyncId,
+ * and computes the per-request SAPISIDHASH Authorization header (including SAPISID1PHASH
+ * and SAPISID3PHASH as used in ArchiveTune / Metrolist) for authenticated InnerTube endpoints.
  */
 class YtMusicAuthManager private constructor(
     private val preferences: YtMusicPreferences
@@ -39,22 +40,31 @@ class YtMusicAuthManager private constructor(
         }
     }
 
-    /** Extracts SAPISID token, falling back to __Secure-3PAPISID and APISID. */
+    /** Extracts SAPISID token, falling back to __Secure-3PAPISID, __Secure-1PAPISID, and APISID. */
     fun sapisid(account: YtConnection = connection.value): String? =
         account.cookies["SAPISID"]
             ?: account.cookies[COOKIE_SAPISID_PRIMARY]
+            ?: account.cookies["__Secure-1PAPISID"]
             ?: account.cookies["APISID"]
 
     /**
-     * Builds `SAPISIDHASH <unix_ts>_<sha1(ts SP sapisid SP origin)>`
+     * Builds `SAPISIDHASH <ts>_<sha1> SAPISID1PHASH <ts>_<sha1> SAPISID3PHASH <ts>_<sha1>`
+     * matching ArchiveTune / Metrolist's InnerTube authentication header format.
      */
     fun authorizationHeaderValue(origin: String = AUTH_ORIGIN, account: YtConnection = connection.value): String? {
-        val token = sapisid(account) ?: return null
+        val primaryToken = sapisid(account) ?: return null
         val timestamp = System.currentTimeMillis() / 1000
-        val payload = "$timestamp $token $origin"
-        val digest = MessageDigest.getInstance("SHA-1").digest(payload.toByteArray(Charsets.UTF_8))
-        val hex = digest.joinToString("") { "%02x".format(it) }
-        return "SAPISIDHASH ${timestamp}_$hex"
+        fun sha1Hash(token: String): String {
+            val payload = "$timestamp $token $origin"
+            val digest = MessageDigest.getInstance("SHA-1").digest(payload.toByteArray(Charsets.UTF_8))
+            return digest.joinToString("") { "%02x".format(it) }
+        }
+        val hashMain = sha1Hash(primaryToken)
+        val token1p = account.cookies["__Secure-1PAPISID"] ?: primaryToken
+        val token3p = account.cookies[COOKIE_SAPISID_PRIMARY] ?: primaryToken
+        val hash1p = sha1Hash(token1p)
+        val hash3p = sha1Hash(token3p)
+        return "SAPISIDHASH ${timestamp}_$hashMain SAPISID1PHASH ${timestamp}_$hash1p SAPISID3PHASH ${timestamp}_$hash3p"
     }
 
     fun cookieHeaderValue(account: YtConnection = connection.value): String? {
@@ -68,32 +78,83 @@ class YtMusicAuthManager private constructor(
         return connection.first { it == persisted }
     }
 
-    suspend fun connect(rawCookieHeader: String, accountName: String, channelHandle: String?, photoUrl: String?) {
+    suspend fun connect(
+        rawCookieHeader: String,
+        accountName: String,
+        channelHandle: String?,
+        photoUrl: String?,
+        visitorData: String? = null,
+        dataSyncId: String? = null,
+        authUserIndex: Int? = null
+    ) {
         val cookies = parseCookieHeader(rawCookieHeader)
         if (cookies.isEmpty()) return
         val name = accountName.ifBlank { "Google account" }
-        // Optimistic in-memory update to avoid DataStore race on slow devices
+        val normalizedSyncId = dataSyncId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { raw ->
+                when {
+                    raw.contains("||") -> raw.substringBefore("||").takeIf { it.isNotBlank() } ?: raw.substringAfter("||")
+                    else -> raw
+                }
+            }
+        val effectiveVisitorData = visitorData?.takeIf { it.isNotBlank() } ?: _connection.value.visitorData
+        val effectiveSyncId = normalizedSyncId ?: _connection.value.onBehalfOfUser
+        val effectiveAuthUser = authUserIndex ?: _connection.value.authUserIndex ?: 0
+
         _connection.value = YtConnection(
             cookies = cookies,
             accountName = name,
             channelHandle = channelHandle,
             photoUrl = photoUrl,
-            connectedAtMillis = System.currentTimeMillis()
+            connectedAtMillis = System.currentTimeMillis(),
+            onBehalfOfUser = effectiveSyncId,
+            authUserIndex = effectiveAuthUser,
+            visitorData = effectiveVisitorData
         )
-        preferences.saveConnection(cookies, name, channelHandle, photoUrl)
+        preferences.saveConnection(
+            cookies = cookies,
+            accountName = name,
+            channelHandle = channelHandle,
+            photoUrl = photoUrl,
+            onBehalfOfUser = effectiveSyncId,
+            authUserIndex = effectiveAuthUser,
+            visitorData = effectiveVisitorData
+        )
     }
 
-    suspend fun updateAccountIdentity(accountName: String, channelHandle: String?, photoUrl: String?) {
+    suspend fun updateAccountIdentity(
+        accountName: String,
+        channelHandle: String?,
+        photoUrl: String?,
+        visitorData: String? = null,
+        dataSyncId: String? = null
+    ) {
         val current = connection.value
         if (!current.isConnected) return
+        val normalizedSyncId = dataSyncId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { if (it.contains("||")) it.substringBefore("||").ifBlank { it.substringAfter("||") } else it }
+            ?: current.onBehalfOfUser
+        val effectiveVisitor = visitorData?.takeIf { it.isNotBlank() } ?: current.visitorData
+        _connection.value = current.copy(
+            accountName = accountName,
+            channelHandle = channelHandle,
+            photoUrl = photoUrl,
+            onBehalfOfUser = normalizedSyncId,
+            visitorData = effectiveVisitor
+        )
         preferences.saveConnection(
             cookies = current.cookies,
             accountName = accountName,
             channelHandle = channelHandle,
             photoUrl = photoUrl,
-            onBehalfOfUser = current.onBehalfOfUser,
+            onBehalfOfUser = normalizedSyncId,
             authUserIndex = current.authUserIndex,
-            pageId = current.pageId
+            pageId = current.pageId,
+            visitorData = effectiveVisitor
         )
     }
 
@@ -136,12 +197,18 @@ class YtMusicAuthManager private constructor(
                 .joinToString("; ")
             if (combined.isBlank()) return false
             val cookies = parseCookieHeader(combined)
-            val hasSapisid = cookies.containsKey("SAPISID") || cookies.containsKey(COOKIE_SAPISID_PRIMARY) || cookies.containsKey("APISID")
-            val hasSid = cookies.containsKey("SID") || cookies.containsKey("__Secure-3PSID")
+            val hasSapisid = cookies.containsKey("SAPISID") ||
+                cookies.containsKey(COOKIE_SAPISID_PRIMARY) ||
+                cookies.containsKey("__Secure-1PAPISID") ||
+                cookies.containsKey("APISID")
+            val hasSid = cookies.containsKey("SID") ||
+                cookies.containsKey("__Secure-3PSID") ||
+                cookies.containsKey("__Secure-1PSID")
             if (!hasSapisid || !hasSid) return false
 
             if (current.cookies == cookies) return false
 
+            _connection.value = current.copy(cookies = cookies)
             preferences.saveConnection(
                 cookies = cookies,
                 accountName = current.accountName.ifBlank { "Google account" },
@@ -149,7 +216,8 @@ class YtMusicAuthManager private constructor(
                 photoUrl = current.photoUrl,
                 onBehalfOfUser = current.onBehalfOfUser,
                 authUserIndex = current.authUserIndex,
-                pageId = current.pageId
+                pageId = current.pageId,
+                visitorData = current.visitorData
             )
             Log.i(TAG, "Auto-refreshed YouTube Music session cookies from CookieManager")
             true

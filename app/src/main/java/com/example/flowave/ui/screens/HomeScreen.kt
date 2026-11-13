@@ -1,16 +1,15 @@
 package com.example.flowave.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -18,24 +17,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.flowave.data.model.InnerTubeTrack
 import com.example.flowave.data.model.Track
-import com.example.flowave.ui.components.LiquidGlassCard
+import com.example.flowave.data.remote.InnerTubeRepository
+import com.example.flowave.data.ytmusic.YtMusicAuthManager
 import com.example.flowave.ui.theme.*
+import kotlinx.coroutines.launch
 
-/**
- * Online-first minimalist Home Screen featuring personalized YouTube Music
- * recommendations, Quick Picks, and recently streamed tracks with iOS Liquid Glass styling.
- */
 @Composable
 fun HomeScreen(
     tracks: List<Track>,
@@ -49,135 +45,241 @@ fun HomeScreen(
     onScanClick: () -> Unit = {},
     onExploreOnlineClick: (() -> Unit)? = null,
     onPlayQueue: ((List<Track>, Int) -> Unit)? = null,
+    onOpenLogin: (() -> Unit)? = null,
     settingsJson: String = com.example.flowave.utils.SettingsSchema.getDefaultJson(),
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val authManager = remember { YtMusicAuthManager.getInstance(context) }
+    val innerTubeRepo = remember { InnerTubeRepository.getInstance(context) }
+    val connection by authManager.connection.collectAsStateWithLifecycle()
+
     var selectedMood by remember { mutableStateOf("All") }
-    val moods = listOf("All", "Quick Picks", "Chill", "Energy", "Workout", "Focus")
+    var moodTracks by remember { mutableStateOf<List<InnerTubeTrack>>(emptyList()) }
+    var isLoadingMood by remember { mutableStateOf(false) }
+    val moods = listOf("All", "Chill", "Energy", "Workout", "Focus", "Lo-Fi", "Synthwave")
+
+    val activeOnlineTracks = if (selectedMood == "All" || moodTracks.isEmpty()) {
+        featuredOnline
+    } else {
+        moodTracks
+    }
 
     val recentlyPlayed = remember(tracks) {
-        tracks.filter { it.lastPlayedTimestamp > 0 }.sortedByDescending { it.lastPlayedTimestamp }.take(10)
+        tracks.filter { it.lastPlayedTimestamp > 0 }
+            .sortedByDescending { it.lastPlayedTimestamp }
+            .take(8)
     }
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .background(DarkBackground),
-        contentPadding = PaddingValues(bottom = 120.dp)
+            .background(PureBlack),
+        contentPadding = PaddingValues(bottom = 140.dp)
     ) {
-        // Mood / Filter Chips in Liquid Glass
+        // Minimalist AMOLED Header
         item {
-            LazyRow(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(moods) { mood ->
-                    val isSelected = selectedMood == mood
-                    val interactionSource = remember { MutableInteractionSource() }
-                    Box(
-                        modifier = Modifier
-                            .expressivePressScale(interactionSource)
-                            .clip(SquircleShape(16.dp))
-                            .background(
-                                if (isSelected) Brush.horizontalGradient(listOf(CyanNeon, PurpleNeon))
-                                else Brush.verticalGradient(listOf(Color(0x22FFFFFF), Color(0x0AFFFFFF)))
-                            )
-                            .clickable(interactionSource = interactionSource, indication = null) {
-                                selectedMood = mood
+                Column {
+                    Text(
+                        text = "FloWave",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        letterSpacing = (-0.5).sp
+                    )
+                    Text(
+                        text = if (connection.isConnected) {
+                            "Signed in • ${connection.accountName}"
+                        } else {
+                            "Ad-free YouTube Music & Local Audio"
+                        },
+                        fontSize = 12.sp,
+                        color = if (connection.isConnected) CyanNeon else TextMuted
+                    )
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (!connection.isConnected && onOpenLogin != null) {
+                        Surface(
+                            shape = RoundedCornerShape(100.dp),
+                            color = CyanNeon.copy(alpha = 0.14f),
+                            modifier = Modifier
+                                .border(1.dp, CyanNeon.copy(alpha = 0.35f), RoundedCornerShape(100.dp))
+                                .clickable { onOpenLogin() }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = "Sign In",
+                                    tint = CyanNeon,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Sign In",
+                                    color = CyanNeon,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                        }
+                    }
+
+                    IconButton(
+                        onClick = onDownloaderClick,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(DarkSurface)
+                            .border(1.dp, GlassBorder, CircleShape)
                     ) {
-                        Text(
-                            text = mood,
-                            color = if (isSelected) PureBlack else TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Downloader",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onProfileClick,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(DarkSurface)
+                            .border(1.dp, GlassBorder, CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Tune,
+                            contentDescription = "Settings",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
             }
         }
 
-        // Quick Picks / Featured Online Recommendations
+        // Mood Chips Row
         item {
-            Column(modifier = Modifier.padding(top = 8.dp)) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(moods) { mood ->
+                    val isSelected = selectedMood == mood
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(100.dp))
+                            .background(if (isSelected) CyanNeon else DarkSurface)
+                            .border(
+                                width = 1.dp,
+                                color = if (isSelected) CyanNeon else GlassBorder,
+                                shape = RoundedCornerShape(100.dp)
+                            )
+                            .clickable {
+                                selectedMood = mood
+                                if (mood != "All") {
+                                    isLoadingMood = true
+                                    scope.launch {
+                                        moodTracks = runCatching {
+                                            innerTubeRepo.searchTracks("$mood music hits")
+                                        }.getOrDefault(emptyList())
+                                        isLoadingMood = false
+                                    }
+                                }
+                            }
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = mood,
+                            color = if (isSelected) PureBlack else TextSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+        }
+
+        // Featured Carousel
+        item {
+            Column(modifier = Modifier.padding(top = 18.dp)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                        .padding(horizontal = 20.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text(
-                            text = "START RADIO FROM A SONG",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = TextMuted,
-                            letterSpacing = 1.sp
-                        )
-                        Text(
-                            text = "Quick Picks",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                    }
+                    Text(
+                        text = if (selectedMood == "All") "Featured Picks" else "$selectedMood Mix",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
 
                     if (onExploreOnlineClick != null) {
                         Text(
-                            text = "Explore all",
+                            text = "Search",
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Medium,
                             color = CyanNeon,
                             modifier = Modifier.clickable { onExploreOnlineClick() }
                         )
                     }
                 }
 
-                if (featuredOnline.isEmpty()) {
-                    // Placeholder shimmer in iOS liquid glass
-                    LiquidGlassCard(
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (activeOnlineTracks.isEmpty() || isLoadingMood) {
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                            .height(140.dp),
-                        cornerRadius = 24.dp
+                            .height(170.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                color = CyanNeon,
-                                modifier = Modifier.size(32.dp),
-                                strokeWidth = 2.5.dp
-                            )
-                        }
+                        CircularProgressIndicator(
+                            color = CyanNeon,
+                            modifier = Modifier.size(28.dp),
+                            strokeWidth = 2.dp
+                        )
                     }
                 } else {
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        items(featuredOnline) { onlineTrack ->
-                            val itemInteraction = remember { MutableInteractionSource() }
+                        items(activeOnlineTracks.take(8), key = { "card_${it.id}" }) { onlineTrack ->
                             Column(
                                 modifier = Modifier
-                                    .width(140.dp)
-                                    .expressivePressScale(itemInteraction)
-                                    .clickable(interactionSource = itemInteraction, indication = null) {
-                                        onOnlineTrackClick(onlineTrack)
-                                    }
+                                    .width(136.dp)
+                                    .clickable { onOnlineTrackClick(onlineTrack) }
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(140.dp)
-                                        .clip(SquircleShape(20.dp))
+                                        .size(136.dp)
+                                        .clip(RoundedCornerShape(14.dp))
                                         .background(DarkSurface)
+                                        .border(1.dp, GlassBorder, RoundedCornerShape(14.dp))
                                 ) {
                                     AsyncImage(
                                         model = onlineTrack.thumbnailUrl,
@@ -189,16 +291,17 @@ fun HomeScreen(
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
                                             .padding(8.dp)
-                                            .size(32.dp)
+                                            .size(30.dp)
                                             .clip(CircleShape)
-                                            .background(Color(0xCC000000)),
+                                            .background(PureBlack.copy(alpha = 0.8f))
+                                            .border(1.dp, GlassBorderWhite, CircleShape),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             Icons.Default.PlayArrow,
                                             contentDescription = "Play",
                                             tint = CyanNeon,
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }
@@ -207,8 +310,8 @@ fun HomeScreen(
 
                                 Text(
                                     text = onlineTrack.title,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
                                     color = TextPrimary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -228,110 +331,168 @@ fun HomeScreen(
             }
         }
 
-        // Recently Played Streamed Tracks Shelf
-        if (recentlyPlayed.isNotEmpty()) {
+        // Quick Picks Vertical List (Start Radio from a Song)
+        if (activeOnlineTracks.isNotEmpty()) {
             item {
-                Spacer(modifier = Modifier.height(28.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                        .padding(start = 20.dp, end = 20.dp, top = 26.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Text(
+                        text = "Quick Radio",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Tap to stream",
+                        fontSize = 12.sp,
+                        color = TextMuted
+                    )
+                }
+            }
+
+            itemsIndexed(
+                items = activeOnlineTracks.drop(2).take(6).ifEmpty { activeOnlineTracks.take(6) },
+                key = { _, item -> "quick_${item.id}" }
+            ) { _, onlineTrack ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOnlineTrackClick(onlineTrack) }
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AsyncImage(
+                        model = onlineTrack.thumbnailUrl,
+                        contentDescription = onlineTrack.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(DarkSurface)
+                    )
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "LISTEN AGAIN",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = TextMuted,
-                            letterSpacing = 1.sp
+                            text = onlineTrack.title,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Recently Played",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            text = "${onlineTrack.artist} • ${onlineTrack.durationText}",
+                            fontSize = 12.sp,
+                            color = TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
+        // Recently Played Section
+        if (recentlyPlayed.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 20.dp, top = 26.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Recently Played",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    if (onPlayQueue != null) {
+                        Text(
+                            text = "Play all",
+                            fontSize = 12.sp,
+                            color = CyanNeon,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { onPlayQueue(recentlyPlayed, 0) }
                         )
                     }
                 }
+            }
 
-                Column(
+            items(recentlyPlayed, key = { "recent_${it.id}" }) { track ->
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .clickable { onTrackClick(track) }
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    recentlyPlayed.forEach { track ->
-                        val trackInteraction = remember { MutableInteractionSource() }
-                        LiquidGlassCard(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .expressivePressScale(trackInteraction)
-                                .clickable(interactionSource = trackInteraction, indication = null) {
-                                    onTrackClick(track)
-                                },
-                            cornerRadius = 18.dp
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(SquircleShape(12.dp))
-                                        .background(Color(0x33FFFFFF)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (!track.artworkUri.isNullOrBlank()) {
-                                        AsyncImage(
-                                            model = track.artworkUri,
-                                            contentDescription = track.title,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        Icon(
-                                            Icons.Default.MusicNote,
-                                            contentDescription = null,
-                                            tint = CyanNeon,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.width(12.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = track.title,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = track.artist,
-                                        fontSize = 12.sp,
-                                        color = TextMuted,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-
-                                Icon(
-                                    Icons.Default.PlayCircle,
-                                    contentDescription = "Play",
-                                    tint = CyanNeon,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(DarkSurface)
+                            .border(1.dp, GlassBorder, RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (!track.artworkUri.isNullOrBlank()) {
+                            AsyncImage(
+                                model = track.artworkUri,
+                                contentDescription = track.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.MusicNote,
+                                contentDescription = null,
+                                tint = CyanNeon,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(14.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = track.title,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = track.artist,
+                            fontSize = 12.sp,
+                            color = TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = CyanNeon,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         }

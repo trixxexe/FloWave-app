@@ -8,10 +8,10 @@ import java.net.URLDecoder
 
 object YouTubeDecipherer {
     private const val TAG = "YouTubeDecipherer"
-    
+
     @Volatile
     private var cachedOps: List<DecipherOp>? = null
-    
+
     @Volatile
     private var lastJsUrl: String? = null
 
@@ -25,11 +25,18 @@ object YouTubeDecipherer {
 
     /**
      * Returns dynamically fetched or calculated signatureTimestamp for YouTube player requests.
-     * In YouTube, signatureTimestamp represents days since Unix epoch.
+     * In YouTube, signatureTimestamp represents days since Unix epoch (minus 1 for safety margin).
      */
     fun getSignatureTimestamp(): Int {
         cachedSignatureTimestamp?.let { return it }
-        return (System.currentTimeMillis() / 86_400_000L).toInt()
+        return ((System.currentTimeMillis() / 86_400_000L) - 1L).toInt()
+    }
+
+    suspend fun ensureTimestampLoaded(okHttpClient: OkHttpClient? = null): Int = withContext(Dispatchers.IO) {
+        cachedSignatureTimestamp?.let { return@withContext it }
+        val client = okHttpClient ?: OkHttpClient()
+        runCatching { getDecipherOps(client) }
+        getSignatureTimestamp()
     }
 
     enum class OpType {
@@ -67,7 +74,6 @@ object YouTubeDecipherer {
         val decipheredSignature = if (ops.isNotEmpty()) {
             applyOps(decodedSignature, ops)
         } else {
-            // Fallback to raw signature if parsing base.js fails
             decodedSignature
         }
 
@@ -93,36 +99,30 @@ object YouTubeDecipherer {
         val now = System.currentTimeMillis()
         cachedOps?.let { ops ->
             if (now - cachedOpsTimestampMs < OPS_CACHE_TTL_MS) {
-                android.util.Log.d(TAG, "Using cached decipher ops (${(now - cachedOpsTimestampMs) / 60000}min old)")
                 return ops
             }
             cachedOps = null
-            android.util.Log.d(TAG, "Decipher ops cache expired. Refetching base.js...")
         }
 
         try {
             val jsUrl = fetchPlayerJsUrl(client) ?: return emptyList()
-            android.util.Log.d(TAG, "Fetched player JS URL: $jsUrl")
-            
             val request = Request.Builder()
                 .url(jsUrl)
-                .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
+                .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
                 .build()
-            
+
             client.newCall(request).execute().use { response ->
                 val jsContent = response.body?.string() ?: ""
                 if (response.isSuccessful && jsContent.isNotEmpty()) {
-                    val stsMatch = Regex("""(?:signatureTimestamp|sts)\s*[:=]\s*(\d+)""").find(jsContent)
+                    val stsMatch = Regex("""(?:signatureTimestamp|sts)\s*[:=]\s*(\d{5})""").find(jsContent)
                     stsMatch?.groupValues?.get(1)?.toIntOrNull()?.let {
                         cachedSignatureTimestamp = it
-                        android.util.Log.d(TAG, "Successfully extracted signatureTimestamp: $it")
                     }
                     val ops = parseDecipherOpsFromJs(jsContent)
                     if (ops.isNotEmpty()) {
                         cachedOps = ops
                         cachedOpsTimestampMs = System.currentTimeMillis()
                         lastJsUrl = jsUrl
-                        android.util.Log.d(TAG, "Successfully parsed and cached ${ops.size} decipher operations.")
                         return ops
                     }
                 }
@@ -136,19 +136,41 @@ object YouTubeDecipherer {
     private fun fetchPlayerJsUrl(client: OkHttpClient): String? {
         try {
             val request = Request.Builder()
-                .url("https://www.youtube.com/embed/dQw4w9WgXcQ")
-                .header("User-Agent", com.example.flowave.utils.FloWaveConstants.USER_AGENT_DESKTOP)
+                .url("https://www.youtube.com/iframe_api")
+                .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
                 .build()
-            
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                val versionMatch = Regex("""\\?/s\\?/player\\?/([a-zA-Z0-9_-]{8,})\\?/""").find(body)
+                val playerHash = versionMatch?.groupValues?.getOrNull(1)
+                if (!playerHash.isNullOrBlank()) {
+                    return "https://www.youtube.com/s/player/$playerHash/player_ias.vflset/en_US/base.js"
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("https://www.youtube.com/embed/dQw4w9WgXcQ")
+                .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+                .build()
+
             client.newCall(request).execute().use { response ->
                 val html = response.body?.string() ?: ""
                 if (response.isSuccessful && html.isNotEmpty()) {
+                    val stsMatch = Regex("""(?:"sts"|signatureTimestamp)\s*:\s*(\d{5})""").find(html)
+                    stsMatch?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
+                        cachedSignatureTimestamp = it
+                    }
+
                     val regex = Regex("\"jsUrl\"\\s*:\\s*\"([^\"]+base\\.js)\"|src=\"([^\"]+base\\.js)\"|href=\"([^\"]+base\\.js)\"")
                     val match = regex.find(html)
-                    var path = match?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
+                    val path = match?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
                         ?: match?.groupValues?.get(2)?.takeIf { it.isNotEmpty() }
                         ?: match?.groupValues?.get(3)
-                    
+
                     if (!path.isNullOrBlank()) {
                         if (path.startsWith("//")) {
                             return "https:$path"
@@ -168,30 +190,26 @@ object YouTubeDecipherer {
     fun parseDecipherOpsFromJs(js: String): List<DecipherOp> {
         val ops = mutableListOf<DecipherOp>()
         try {
-            // Find the main decipher function definition
             val decipherFuncRegex = Regex("(?s)([a-zA-Z0-9$]+)\\s*=\\s*function\\s*\\(\\s*a\\s*\\)\\s*\\{\\s*a\\s*=\\s*a\\.split\\s*\\(\\s*\"\"\\s*\\);?\\s*(.*?)\\s*;?\\s*return\\s+a\\.join\\s*\\(\\s*\"\"\\s*\\)\\s*\\}")
             val funcMatch = decipherFuncRegex.find(js) ?: return emptyList()
-            
+
             val funcBody = funcMatch.groupValues[2]
-            
-            // Extract helper object name
-            val helperObjRegex = Regex("([a-zA-Z0-9$]+)\\.[a-zA-Z0-9$]+\\s*\\(\\s*a\\s*,")
+
+            val helperObjRegex = Regex("([a-zA-Z0-9$]+)(?:\\.[a-zA-Z0-9$]+|\\[\"[a-zA-Z0-9$]+\"\\])\\s*\\(\\s*a\\s*,")
             val helperMatch = helperObjRegex.find(funcBody) ?: return emptyList()
             val helperObjName = helperMatch.groupValues[1]
-            
-            // Extract the helper object's block of definitions
+
             val helperDefRegex = Regex("(?s)(?:var|const|let)?\\s*${Regex.escape(helperObjName)}\\s*=\\s*\\{(.*?)\\}\\s*;")
             val helperDefMatch = helperDefRegex.find(js) ?: return emptyList()
             val helperBlock = helperDefMatch.groupValues[1]
-            
-            // Parse the helper functions and map their names to an operation type
-            val methodRegex = Regex("(?s)([a-zA-Z0-9$]+)\\s*:\\s*function\\s*\\(\\s*a\\s*(?:,\\s*b\\s*)?\\)\\s*\\{\\s*(.*?)\\s*\\}")
+
+            val methodRegex = Regex("(?s)\"?([a-zA-Z0-9$]+)\"?\\s*:\\s*function\\s*\\(\\s*a\\s*(?:,\\s*b\\s*)?\\)\\s*\\{\\s*(.*?)\\s*\\}")
             val methodMap = mutableMapOf<String, OpType>()
-            
+
             for (m in methodRegex.findAll(helperBlock)) {
                 val name = m.groupValues[1]
                 val body = m.groupValues[2]
-                
+
                 val type = when {
                     body.contains("reverse") -> OpType.REVERSE
                     body.contains("splice") || body.contains("slice") -> OpType.SLICE
@@ -202,12 +220,11 @@ object YouTubeDecipherer {
                     methodMap[name] = type
                 }
             }
-            
-            // Parse statements inside funcBody
-            val statementRegex = Regex("${Regex.escape(helperObjName)}\\.([a-zA-Z0-9$]+)\\s*\\(\\s*a\\s*(?:,\\s*(\\d+)\\s*)?\\)")
+
+            val statementRegex = Regex("${Regex.escape(helperObjName)}(?:\\.([a-zA-Z0-9$]+)|\\[\"([a-zA-Z0-9$]+)\"\\])\\s*\\(\\s*a\\s*(?:,\\s*(\\d+)\\s*)?\\)")
             for (s in statementRegex.findAll(funcBody)) {
-                val methodName = s.groupValues[1]
-                val argStr = s.groupValues[2]
+                val methodName = s.groupValues[1].ifEmpty { s.groupValues[2] }
+                val argStr = s.groupValues[3]
                 val arg = argStr.toIntOrNull() ?: 0
                 val type = methodMap[methodName] ?: continue
                 ops.add(DecipherOp(type, arg))

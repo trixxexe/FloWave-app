@@ -58,7 +58,23 @@ class FloWaveDataSourceFactory(
             )
         )
 
-    val defaultDataSourceFactory: DefaultDataSource.Factory = DefaultDataSource.Factory(context, defaultHttpDataSourceFactory)
+    // Leaving setUserAgent(null) on the actual upstream HTTP factory ensures Media3's
+    // DefaultHttpDataSource honors the per-client "User-Agent" header inside DataSpec.httpRequestHeaders
+    // instead of overwriting it with a static userAgent field.
+    private val upstreamHttpDataSourceFactory: DefaultHttpDataSource.Factory = DefaultHttpDataSource.Factory()
+        .setUserAgent(null)
+        .setAllowCrossProtocolRedirects(true)
+        .setConnectTimeoutMs(10000)
+        .setReadTimeoutMs(15000)
+        .setDefaultRequestProperties(
+            mapOf(
+                "User-Agent" to ANDROID_VR_USER_AGENT,
+                "Origin" to "https://www.youtube.com",
+                "Referer" to "https://www.youtube.com/"
+            )
+        )
+
+    val defaultDataSourceFactory: DefaultDataSource.Factory = DefaultDataSource.Factory(context, upstreamHttpDataSourceFactory)
 
     val cacheDataSourceFactory: CacheDataSource.Factory = CacheDataSource.Factory()
         .setCache(FloWaveCacheManager.getCache(context))
@@ -73,6 +89,10 @@ class FloWaveDataSourceFactory(
 
     fun resetAttempts(videoId: String) {
         failedAttempts.remove(videoId)
+    }
+
+    fun clearAllAttempts() {
+        failedAttempts.clear()
     }
 
     @Throws(IOException::class)
