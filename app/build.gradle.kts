@@ -76,12 +76,12 @@ android {
   // every split retains the complete streaming and download feature set.
   splits {
     abi {
-      isEnable = true
+      isEnable = System.getenv("CI") == "true"
       reset()
       // FloWave targets physical Android phones; arm64 is the recommended
       // download and armeabi-v7a keeps compatibility with older phones.
       include("arm64-v8a", "armeabi-v7a")
-      isUniversalApk = false
+      isUniversalApk = true
     }
   }
   packaging {

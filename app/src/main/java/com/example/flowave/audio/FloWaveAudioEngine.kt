@@ -77,6 +77,7 @@ data class EqualizerState(
     val isBitPerfect: Boolean = false
 )
 
+@OptIn(UnstableApi::class)
 class FloWaveAudioEngine(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private val logger = FloWaveLogger.getInstance(context)
