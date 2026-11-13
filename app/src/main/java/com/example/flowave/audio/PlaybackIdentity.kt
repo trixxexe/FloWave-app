@@ -142,6 +142,11 @@ object OnlinePlaybackPolicy {
         return normalized.isBlank() ||
             normalized.startsWith("audio/") ||
             normalized.startsWith("video/") ||
-            normalized == "application/octet-stream"
+            normalized == "application/octet-stream" ||
+            normalized == "application/vnd.apple.mpegurl" ||
+            normalized == "application/x-mpegurl" ||
+            normalized == "audio/mpegurl" ||
+            normalized == "audio/x-mpegurl" ||
+            normalized == "application/dash+xml"
     }
 }

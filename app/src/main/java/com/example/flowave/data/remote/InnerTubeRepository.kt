@@ -785,7 +785,6 @@ open class InnerTubeRepository(context: Context? = null) {
 
         var visitorData = getVisitorData(forceRefresh = forceRefresh)
         var needFreshVisitorData = false
-        val sts = YouTubeDecipherer.getSignatureTimestamp()
         val isSignedIn = authManager?.connection?.value?.isConnected == true
         val hlsFallbacks = mutableListOf<ResolvedStreamSource>()
 
@@ -824,6 +823,9 @@ open class InnerTubeRepository(context: Context? = null) {
                         }
                     }
 
+                    val isHtml5Client = clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER" ||
+                        clientConfig.clientName == "WEB_REMIX"
+
                     val contextJson = JSONObject().apply {
                         put("client", clientJson)
                         if (clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
@@ -851,7 +853,7 @@ open class InnerTubeRepository(context: Context? = null) {
                     if (!visitorData.isNullOrBlank()) {
                         reqBuilder.header("X-Goog-Visitor-Id", visitorData)
                     }
-                    if (isRemix || clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                    if (isHtml5Client) {
                         reqBuilder.header("Origin", originUrl)
                         reqBuilder.header("Referer", "$originUrl/")
                     }
@@ -869,12 +871,15 @@ open class InnerTubeRepository(context: Context? = null) {
                         put("videoId", videoId)
                         put("contentCheckOk", true)
                         put("racyCheckOk", true)
-                        put("playbackContext", JSONObject().apply {
-                            put("contentPlaybackContext", JSONObject().apply {
-                                put("html5Preference", "HTML5_PREF_WANTS")
-                                put("signatureTimestamp", sts)
+                        if (isHtml5Client) {
+                            val sts = YouTubeDecipherer.ensureTimestampLoaded(client)
+                            put("playbackContext", JSONObject().apply {
+                                put("contentPlaybackContext", JSONObject().apply {
+                                    put("html5Preference", "HTML5_PREF_WANTS")
+                                    put("signatureTimestamp", sts)
+                                })
                             })
-                        })
+                        }
                         if (clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
                             put("thirdParty", JSONObject().apply {
                                 put("embedUrl", "https://www.youtube.com/")
@@ -923,12 +928,7 @@ open class InnerTubeRepository(context: Context? = null) {
                                 val requestHeaders = mutableMapOf(
                                     "User-Agent" to clientConfig.userAgent
                                 )
-                                clientConfig.clientNumber?.let { requestHeaders["X-YouTube-Client-Name"] = it }
-                                requestHeaders["X-YouTube-Client-Version"] = clientConfig.clientVersion
-                                if (!visitorData.isNullOrBlank()) {
-                                    requestHeaders["X-Goog-Visitor-Id"] = visitorData
-                                }
-                                if (isRemix || clientConfig.clientName == "ANDROID_VR" || clientConfig.clientName == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+                                if (isHtml5Client) {
                                     requestHeaders["Origin"] = originUrl
                                     requestHeaders["Referer"] = "$originUrl/"
                                 }

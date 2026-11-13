@@ -754,7 +754,8 @@ class FloWaveAudioEngine(private val context: Context) {
 
         val sameQueue = _playbackState.value.queue.map { it.id } == playableQueue.map { it.id }
         if (sameQueue && _playbackState.value.currentQueueIndex == effectiveIndex &&
-            player.currentMediaItem?.mediaId == playableQueue.getOrNull(effectiveIndex)?.id
+            player.currentMediaItem?.mediaId == playableQueue.getOrNull(effectiveIndex)?.id &&
+            player.playbackState != Player.STATE_IDLE
         ) {
             logger.debug("queue", "set_queue_idempotent", context = mapOf(
                 "index" to effectiveIndex,
@@ -813,9 +814,9 @@ class FloWaveAudioEngine(private val context: Context) {
             runCatching { innerTubeRepo.getStreamResolution(track.id) }
         }
 
-        val updatedOnlineTrack = innerTubeRepo.createOnlineTrack(track)
+        val updatedOnlineTrack = canonicalTrack(innerTubeRepo.createOnlineTrack(track))
         withContext(Dispatchers.Main) {
-            playTrack(updatedOnlineTrack)
+            setQueueAndPlay(listOf(updatedOnlineTrack), 0)
         }
 
         // Fetch related YouTube Music radio queue in the background so playback continues seamlessly
@@ -883,7 +884,7 @@ class FloWaveAudioEngine(private val context: Context) {
         val index = currentQueue.indexOfFirst { it.id == normalizedTrack.id }
         if (index >= 0) {
             if (index == _playbackState.value.currentQueueIndex &&
-                _playbackState.value.currentTrack?.id == normalizedTrack.id &&
+                exoPlayer?.currentMediaItem?.mediaId == normalizedTrack.id &&
                 exoPlayer?.playbackState != Player.STATE_IDLE
             ) {
                 logger.debug("player", "track_selection_idempotent", context = mapOf(

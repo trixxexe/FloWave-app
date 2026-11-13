@@ -103,6 +103,13 @@ class FloWaveDataSourceFactory(
             return dataSpec
         }
 
+        // Direct googlevideo.com stream/HLS segment URLs are already resolved CDN endpoints.
+        if (dataSpec.key == null && (scheme == "http" || scheme == "https") &&
+            uri.host?.contains("googlevideo.com", ignoreCase = true) == true
+        ) {
+            return dataSpec
+        }
+
         val videoId = dataSpec.key ?: PlaybackIdentity.extractVideoId(uri)
         if (scheme == "flowave" && videoId.isNullOrBlank()) {
             throw IOException("Missing online track identifier")
