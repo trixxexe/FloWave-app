@@ -122,9 +122,19 @@ fun MainScreen() {
     var accumulatedTimeMs by remember { mutableLongStateOf(0L) }
     var pendingDiagnosticExport by remember { mutableStateOf<String?>(null) }
 
-    // Refresh personalized Home feed whenever YouTube Music login state changes
-    LaunchedEffect(connection.isConnected) {
+    // Refresh account identity and personalized Home feed whenever YouTube Music login state or cookies change
+    LaunchedEffect(connection.isConnected, connection.cookies) {
         coroutineScope.launch {
+            if (connection.isConnected) {
+                val info = runCatching { innerTubeRepo.fetchAccountInfo() }.getOrNull()
+                if (info != null && info.accountName.isNotBlank()) {
+                    authManager.updateAccountIdentity(
+                        accountName = info.accountName,
+                        channelHandle = info.channelHandle,
+                        photoUrl = info.photoUrl
+                    )
+                }
+            }
             try {
                 featuredOnlineTracks = innerTubeRepo.fetchHomeFeed()
             } catch (_: Exception) {
@@ -190,6 +200,7 @@ fun MainScreen() {
 
     BackHandler(enabled = true) {
         if (showLoginScreen) {
+            authManager.tryConnectFromCookieManager()
             showLoginScreen = false
         } else if (showEqualizerScreen) {
             showEqualizerScreen = false
@@ -511,12 +522,15 @@ fun MainScreen() {
                             onCreatePlaylist = { name ->
                                 coroutineScope.launch { repository.createPlaylist(name) }
                             },
-                            onPlayPlaylist = { playlist ->
+                             onPlayPlaylist = { playlist ->
                                 coroutineScope.launch {
                                     val tracks = repository.getTracksForPlaylist(playlist.id).first()
                                     if (tracks.isNotEmpty()) audioEngine.setQueueAndPlay(tracks, 0)
                                     else Toast.makeText(context, "Playlist is empty", Toast.LENGTH_SHORT).show()
                                 }
+                            },
+                            onPlayOnlineQueue = { tracks, idx ->
+                                audioEngine.playOnlineQueue(tracks, idx)
                             },
                             onOpenLogin = { showLoginScreen = true }
                         )

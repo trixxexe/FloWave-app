@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,6 +52,7 @@ fun LibraryScreen(
     onCreatePlaylist: (String) -> Unit = {},
     onPlayPlaylist: (Playlist) -> Unit = {},
     onPlayQueue: ((List<Track>, Int) -> Unit)? = null,
+    onPlayOnlineQueue: ((List<InnerTubeTrack>, Int) -> Unit)? = null,
     onAddToQueueNext: ((Track) -> Unit)? = null,
     onAddToQueueLast: ((Track) -> Unit)? = null,
     onOpenLogin: () -> Unit = {},
@@ -85,7 +87,7 @@ fun LibraryScreen(
         }
     }
 
-    LaunchedEffect(connection.isConnected) {
+    LaunchedEffect(connection.isConnected, connection.cookies) {
         if (connection.isConnected) {
             isLoadingPlaylists = true
             coroutineScope.launch {
@@ -105,8 +107,8 @@ fun LibraryScreen(
         }
     }
 
-    LaunchedEffect(selectedTab, connection.isConnected) {
-        if (selectedTab == 1 && likedTracks.isEmpty() && connection.isConnected) {
+    LaunchedEffect(selectedTab, connection.isConnected, connection.cookies) {
+        if (selectedTab == 1 && connection.isConnected) {
             isLoadingLiked = true
             coroutineScope.launch {
                 likedTracks = innerTubeRepo.fetchLikedMusic()
@@ -154,8 +156,11 @@ fun LibraryScreen(
                 if (activePlaylistTracks.isNotEmpty()) {
                     Button(
                         onClick = {
-                            val first = activePlaylistTracks.firstOrNull()
-                            if (first != null) onOnlineTrackClick(first)
+                            if (onPlayOnlineQueue != null) {
+                                onPlayOnlineQueue(activePlaylistTracks, 0)
+                            } else {
+                                activePlaylistTracks.firstOrNull()?.let(onOnlineTrackClick)
+                            }
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = CyanNeon,
@@ -402,10 +407,16 @@ fun LibraryScreen(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(bottom = 140.dp, top = 6.dp)
                         ) {
-                            items(likedTracks, key = { "yt_like_${it.id}" }) { track ->
+                            itemsIndexed(likedTracks, key = { index, it -> "yt_like_${it.id}_$index" }) { index, track ->
                                 OnlineLibraryRow(
                                     track = track,
-                                    onClick = { onOnlineTrackClick(track) },
+                                    onClick = {
+                                        if (onPlayOnlineQueue != null) {
+                                            onPlayOnlineQueue(likedTracks, index)
+                                        } else {
+                                            onOnlineTrackClick(track)
+                                        }
+                                    },
                                     onDownload = { onDownloadOnlineTrack(track) }
                                 )
                             }
@@ -526,10 +537,16 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 140.dp, top = 6.dp)
                 ) {
-                    items(activePlaylistTracks, key = { "pl_item_${it.id}" }) { track ->
+                    itemsIndexed(activePlaylistTracks, key = { index, it -> "pl_item_${it.id}_$index" }) { index, track ->
                         OnlineLibraryRow(
                             track = track,
-                            onClick = { onOnlineTrackClick(track) },
+                            onClick = {
+                                if (onPlayOnlineQueue != null) {
+                                    onPlayOnlineQueue(activePlaylistTracks, index)
+                                } else {
+                                    onOnlineTrackClick(track)
+                                }
+                            },
                             onDownload = { onDownloadOnlineTrack(track) }
                         )
                     }

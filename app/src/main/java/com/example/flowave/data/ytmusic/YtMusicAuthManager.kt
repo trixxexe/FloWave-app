@@ -25,7 +25,7 @@ import kotlin.coroutines.resume
 class YtMusicAuthManager private constructor(
     private val preferences: YtMusicPreferences
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _connection = MutableStateFlow(YtConnection.DISCONNECTED)
     val connection: StateFlow<YtConnection> = _connection.asStateFlow()
@@ -33,7 +33,17 @@ class YtMusicAuthManager private constructor(
     init {
         scope.launch {
             runCatching {
-                preferences.connection.collect { _connection.value = it }
+                val initial = preferences.connection.first()
+                if (initial.isConnected) {
+                    _connection.value = initial
+                } else {
+                    tryConnectFromCookieManager()
+                }
+                preferences.connection.collect { persisted ->
+                    if (persisted.isConnected || !_connection.value.isConnected) {
+                        _connection.value = persisted
+                    }
+                }
             }.onFailure {
                 Log.w(TAG, "Failed to observe YT connection from preferences", it)
             }
@@ -50,10 +60,11 @@ class YtMusicAuthManager private constructor(
     /**
      * Builds `SAPISIDHASH <ts>_<sha1> SAPISID1PHASH <ts>_<sha1> SAPISID3PHASH <ts>_<sha1>`
      * matching ArchiveTune / Metrolist's InnerTube authentication header format.
+     * Uses server-adjusted time when available so emulator clock skew never invalidates SAPISIDHASH.
      */
     fun authorizationHeaderValue(origin: String = AUTH_ORIGIN, account: YtConnection = connection.value): String? {
         val primaryToken = sapisid(account) ?: return null
-        val timestamp = System.currentTimeMillis() / 1000
+        val timestamp = currentServerMillis() / 1000L
         fun sha1Hash(token: String): String {
             val payload = "$timestamp $token $origin"
             val digest = MessageDigest.getInstance("SHA-1").digest(payload.toByteArray(Charsets.UTF_8))
@@ -74,8 +85,85 @@ class YtMusicAuthManager private constructor(
     }
 
     suspend fun awaitLoadedConnection(): YtConnection {
+        if (_connection.value.isConnected) return _connection.value
         val persisted = preferences.connection.first()
-        return connection.first { it == persisted }
+        if (persisted.isConnected) {
+            _connection.value = persisted
+            return persisted
+        }
+        return _connection.value
+    }
+
+    /**
+     * Normalizes YouTube's DATASYNC_ID (`onBehalfOfUser`).
+     * For standard Google accounts, DATASYNC_ID is `<gaiaId>||` (second part blank) — sending
+     * `onBehalfOfUser` for a personal account causes HTTP 400 INVALID_ARGUMENT on InnerTube.
+     * Only Brand Accounts (`<brandPageId>||<ownerGaiaId>`, where both parts are non-blank and distinct)
+     * require `onBehalfOfUser`.
+     */
+    private fun normalizeBrandSyncId(dataSyncId: String?): String? {
+        val raw = dataSyncId?.trim()?.takeIf { it.isNotBlank() && it != "null" } ?: return null
+        if (!raw.contains("||")) return null
+        val firstPart = raw.substringBefore("||").trim()
+        val secondPart = raw.substringAfter("||").trim()
+        return if (firstPart.isNotBlank() && secondPart.isNotBlank() && firstPart != secondPart) {
+            firstPart
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Immediately updates the in-memory connection stateFlow and persists to DataStore on
+     * [scope] so closing the login screen never cancels the save operation.
+     */
+    fun connectImmediate(
+        rawCookieHeader: String,
+        accountName: String = "YouTube Music Account",
+        channelHandle: String? = null,
+        photoUrl: String? = null,
+        visitorData: String? = null,
+        dataSyncId: String? = null,
+        authUserIndex: Int? = null
+    ): Boolean {
+        val cookies = parseCookieHeader(rawCookieHeader)
+        if (cookies.isEmpty() || !hasRequiredSessionCookies(cookies)) return false
+        val current = _connection.value
+        val name = accountName.ifBlank {
+            current.accountName.ifBlank { "YouTube Music Account" }
+        }
+        val effectiveVisitorData = visitorData?.takeIf { it.isNotBlank() && it != "null" } ?: current.visitorData
+        val effectiveSyncId = normalizeBrandSyncId(dataSyncId) ?: current.onBehalfOfUser
+        val effectiveAuthUser = authUserIndex ?: current.authUserIndex ?: 0
+
+        val updated = YtConnection(
+            cookies = cookies,
+            accountName = name,
+            channelHandle = channelHandle ?: current.channelHandle,
+            photoUrl = photoUrl ?: current.photoUrl,
+            connectedAtMillis = System.currentTimeMillis(),
+            onBehalfOfUser = effectiveSyncId,
+            authUserIndex = effectiveAuthUser,
+            visitorData = effectiveVisitorData
+        )
+        _connection.value = updated
+
+        scope.launch {
+            runCatching {
+                preferences.saveConnection(
+                    cookies = cookies,
+                    accountName = updated.accountName,
+                    channelHandle = updated.channelHandle,
+                    photoUrl = updated.photoUrl,
+                    onBehalfOfUser = updated.onBehalfOfUser,
+                    authUserIndex = updated.authUserIndex,
+                    visitorData = updated.visitorData
+                )
+            }.onFailure {
+                Log.w(TAG, "Failed to persist YT connection", it)
+            }
+        }
+        return true
     }
 
     suspend fun connect(
@@ -89,18 +177,9 @@ class YtMusicAuthManager private constructor(
     ) {
         val cookies = parseCookieHeader(rawCookieHeader)
         if (cookies.isEmpty()) return
-        val name = accountName.ifBlank { "Google account" }
-        val normalizedSyncId = dataSyncId
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { raw ->
-                when {
-                    raw.contains("||") -> raw.substringBefore("||").takeIf { it.isNotBlank() } ?: raw.substringAfter("||")
-                    else -> raw
-                }
-            }
-        val effectiveVisitorData = visitorData?.takeIf { it.isNotBlank() } ?: _connection.value.visitorData
-        val effectiveSyncId = normalizedSyncId ?: _connection.value.onBehalfOfUser
+        val name = accountName.ifBlank { "YouTube Music Account" }
+        val effectiveVisitorData = visitorData?.takeIf { it.isNotBlank() && it != "null" } ?: _connection.value.visitorData
+        val effectiveSyncId = normalizeBrandSyncId(dataSyncId) ?: _connection.value.onBehalfOfUser
         val effectiveAuthUser = authUserIndex ?: _connection.value.authUserIndex ?: 0
 
         _connection.value = YtConnection(
@@ -133,24 +212,21 @@ class YtMusicAuthManager private constructor(
     ) {
         val current = connection.value
         if (!current.isConnected) return
-        val normalizedSyncId = dataSyncId
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { if (it.contains("||")) it.substringBefore("||").ifBlank { it.substringAfter("||") } else it }
-            ?: current.onBehalfOfUser
-        val effectiveVisitor = visitorData?.takeIf { it.isNotBlank() } ?: current.visitorData
+        val normalizedSyncId = normalizeBrandSyncId(dataSyncId) ?: current.onBehalfOfUser
+        val effectiveVisitor = visitorData?.takeIf { it.isNotBlank() && it != "null" } ?: current.visitorData
+        val cleanName = accountName.ifBlank { current.accountName.ifBlank { "YouTube Music Account" } }
         _connection.value = current.copy(
-            accountName = accountName,
-            channelHandle = channelHandle,
-            photoUrl = photoUrl,
+            accountName = cleanName,
+            channelHandle = channelHandle ?: current.channelHandle,
+            photoUrl = photoUrl ?: current.photoUrl,
             onBehalfOfUser = normalizedSyncId,
             visitorData = effectiveVisitor
         )
         preferences.saveConnection(
             cookies = current.cookies,
-            accountName = accountName,
-            channelHandle = channelHandle,
-            photoUrl = photoUrl,
+            accountName = cleanName,
+            channelHandle = channelHandle ?: current.channelHandle,
+            photoUrl = photoUrl ?: current.photoUrl,
             onBehalfOfUser = normalizedSyncId,
             authUserIndex = current.authUserIndex,
             pageId = current.pageId,
@@ -176,42 +252,91 @@ class YtMusicAuthManager private constructor(
         }
     }
 
-    /**
-     * Reads updated session cookies from Android's CookieManager across Google and YouTube domains.
-     * Returns true if fresh cookies were found and saved.
-     */
-    suspend fun refreshCookiesFromCookieManager(): Boolean {
-        val current = connection.value
-        if (!current.isConnected) return false
+    fun hasRequiredSessionCookies(cookies: Map<String, String>): Boolean {
+        val hasSapisid = cookies.containsKey("SAPISID") ||
+            cookies.containsKey(COOKIE_SAPISID_PRIMARY) ||
+            cookies.containsKey("__Secure-1PAPISID") ||
+            cookies.containsKey("APISID")
+        val hasSid = cookies.containsKey("SID") ||
+            cookies.containsKey("__Secure-3PSID") ||
+            cookies.containsKey("__Secure-1PSID") ||
+            cookies.containsKey("LOGIN_INFO")
+        return hasSapisid && hasSid
+    }
 
+    /**
+     * Harvests cookies directly from Android's CookieManager across YouTube domains
+     * and connects immediately if valid session cookies are present.
+     */
+    fun tryConnectFromCookieManager(
+        visitorData: String? = null,
+        dataSyncId: String? = null,
+        authUserIndex: Int? = null
+    ): Boolean {
         return try {
             val cm = CookieManager.getInstance()
             cm.flush()
             val domains = listOf(
                 "https://music.youtube.com",
                 "https://www.youtube.com",
-                "https://accounts.google.com",
+                "https://m.youtube.com",
                 "https://youtube.com"
             )
-            val combined = domains.mapNotNull { cm.getCookie(it)?.takeIf(String::isNotBlank) }
-                .joinToString("; ")
-            if (combined.isBlank()) return false
-            val cookies = parseCookieHeader(combined)
-            val hasSapisid = cookies.containsKey("SAPISID") ||
-                cookies.containsKey(COOKIE_SAPISID_PRIMARY) ||
-                cookies.containsKey("__Secure-1PAPISID") ||
-                cookies.containsKey("APISID")
-            val hasSid = cookies.containsKey("SID") ||
-                cookies.containsKey("__Secure-3PSID") ||
-                cookies.containsKey("__Secure-1PSID")
-            if (!hasSapisid || !hasSid) return false
+            val merged = mutableMapOf<String, String>()
+            for (domain in domains) {
+                val raw = cm.getCookie(domain) ?: continue
+                merged.putAll(parseCookieHeader(raw))
+            }
+            if (!hasRequiredSessionCookies(merged)) return false
+            val rawHeader = merged.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            connectImmediate(
+                rawCookieHeader = rawHeader,
+                accountName = _connection.value.accountName.ifBlank { "YouTube Music Account" },
+                channelHandle = _connection.value.channelHandle,
+                photoUrl = _connection.value.photoUrl,
+                visitorData = visitorData,
+                dataSyncId = dataSyncId,
+                authUserIndex = authUserIndex
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "tryConnectFromCookieManager failed", e)
+            false
+        }
+    }
 
-            if (current.cookies == cookies) return false
+    /**
+     * Reads updated session cookies from Android's CookieManager across YouTube domains.
+     * Returns true if fresh cookies were found and saved.
+     */
+    suspend fun refreshCookiesFromCookieManager(): Boolean {
+        return try {
+            val cm = CookieManager.getInstance()
+            cm.flush()
+            val domains = listOf(
+                "https://music.youtube.com",
+                "https://www.youtube.com",
+                "https://m.youtube.com",
+                "https://youtube.com"
+            )
+            val cookies = mutableMapOf<String, String>()
+            for (domain in domains) {
+                val raw = cm.getCookie(domain) ?: continue
+                cookies.putAll(parseCookieHeader(raw))
+            }
+            if (!hasRequiredSessionCookies(cookies)) return false
 
-            _connection.value = current.copy(cookies = cookies)
+            val current = connection.value
+            if (current.isConnected && current.cookies == cookies) return false
+
+            val accountName = current.accountName.ifBlank { "YouTube Music Account" }
+            _connection.value = current.copy(
+                cookies = cookies,
+                accountName = accountName,
+                connectedAtMillis = if (current.connectedAtMillis > 0L) current.connectedAtMillis else System.currentTimeMillis()
+            )
             preferences.saveConnection(
                 cookies = cookies,
-                accountName = current.accountName.ifBlank { "Google account" },
+                accountName = accountName,
                 channelHandle = current.channelHandle,
                 photoUrl = current.photoUrl,
                 onBehalfOfUser = current.onBehalfOfUser,
@@ -243,6 +368,17 @@ class YtMusicAuthManager private constructor(
         private const val TAG = "YtMusicAuthManager"
         const val COOKIE_SAPISID_PRIMARY = "__Secure-3PAPISID"
         const val AUTH_ORIGIN = "https://music.youtube.com"
+
+        @Volatile
+        var serverTimeOffsetMs: Long = 0L
+
+        fun updateServerTime(serverEpochMillis: Long) {
+            if (serverEpochMillis > 1_600_000_000_000L) {
+                serverTimeOffsetMs = serverEpochMillis - System.currentTimeMillis()
+            }
+        }
+
+        fun currentServerMillis(): Long = System.currentTimeMillis() + serverTimeOffsetMs
 
         @Volatile
         private var instance: YtMusicAuthManager? = null

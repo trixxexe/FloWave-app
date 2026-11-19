@@ -4,10 +4,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.schabi.newpipe.extractor.NewPipe
+import org.schabi.newpipe.extractor.downloader.Downloader
+import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
+import org.schabi.newpipe.extractor.services.youtube.YoutubeJavaScriptPlayerManager
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 object YouTubeDecipherer {
     private const val TAG = "YouTubeDecipherer"
+    private const val DEFAULT_VIDEO_ID = "dQw4w9WgXcQ"
+
+    @Volatile
+    private var newPipeInitialized: Boolean = false
 
     @Volatile
     private var cachedOps: List<DecipherOp>? = null
@@ -23,6 +33,57 @@ object YouTubeDecipherer {
 
     private const val OPS_CACHE_TTL_MS = 24L * 60 * 60 * 1000 // 24 hours
 
+    private class NewPipeDownloaderImpl(private val client: OkHttpClient) : Downloader() {
+        override fun execute(request: org.schabi.newpipe.extractor.downloader.Request): org.schabi.newpipe.extractor.downloader.Response {
+            val httpMethod = request.httpMethod()
+            val url = request.url()
+            val headers = request.headers()
+            val dataToSend = request.dataToSend()
+
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .method(httpMethod, dataToSend?.toRequestBody(null))
+                .header("User-Agent", FloWaveConstants.USER_AGENT_DESKTOP)
+
+            headers.forEach { (headerName, headerValueList) ->
+                if (headerValueList.size > 1) {
+                    requestBuilder.removeHeader(headerName)
+                    headerValueList.forEach { headerValue ->
+                        requestBuilder.addHeader(headerName, headerValue)
+                    }
+                } else if (headerValueList.size == 1) {
+                    requestBuilder.header(headerName, headerValueList[0])
+                }
+            }
+
+            val response = client.newCall(requestBuilder.build()).execute()
+            if (response.code == 429) {
+                response.close()
+                throw ReCaptchaException("reCaptcha Challenge requested", url)
+            }
+            val responseBodyToReturn = response.body?.string()
+            val latestUrl = response.request.url.toString()
+            return org.schabi.newpipe.extractor.downloader.Response(
+                response.code,
+                response.message,
+                response.headers.toMultimap(),
+                responseBodyToReturn,
+                latestUrl
+            )
+        }
+    }
+
+    @Synchronized
+    fun ensureNewPipeInitialized(okHttpClient: OkHttpClient? = null) {
+        if (!newPipeInitialized) {
+            runCatching {
+                val client = okHttpClient ?: OkHttpClient()
+                NewPipe.init(NewPipeDownloaderImpl(client))
+                newPipeInitialized = true
+            }
+        }
+    }
+
     /**
      * Returns dynamically fetched or calculated signatureTimestamp for YouTube player requests.
      * In YouTube, signatureTimestamp represents days since Unix epoch (minus 1 for safety margin).
@@ -32,11 +93,49 @@ object YouTubeDecipherer {
         return ((System.currentTimeMillis() / 86_400_000L) - 1L).toInt()
     }
 
-    suspend fun ensureTimestampLoaded(okHttpClient: OkHttpClient? = null): Int = withContext(Dispatchers.IO) {
+    suspend fun ensureTimestampLoaded(
+        okHttpClient: OkHttpClient? = null,
+        videoId: String = DEFAULT_VIDEO_ID
+    ): Int = withContext(Dispatchers.IO) {
         cachedSignatureTimestamp?.let { return@withContext it }
         val client = okHttpClient ?: OkHttpClient()
+        ensureNewPipeInitialized(client)
+
+        val newPipeSts = runCatching {
+            YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId.ifBlank { DEFAULT_VIDEO_ID })
+        }.getOrNull()
+        if (newPipeSts != null && newPipeSts > 18000) {
+            cachedSignatureTimestamp = newPipeSts
+            return@withContext newPipeSts
+        }
+
         runCatching { getDecipherOps(client) }
         getSignatureTimestamp()
+    }
+
+    /**
+     * Deobfuscates the YouTube `&n=` throttling parameter using NewPipeExtractor's JS engine
+     * (matching ArchiveTune / Metrolist / OuterTune's NewPipeUtils).
+     */
+    fun deobfuscateThrottlingParameter(
+        url: String,
+        videoId: String = DEFAULT_VIDEO_ID,
+        okHttpClient: OkHttpClient? = null
+    ): String {
+        if (url.isBlank() || (!url.contains("&n=") && !url.contains("?n="))) {
+            return url
+        }
+        val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
+        if (host == "localhost" || host == "127.0.0.1" || host.endsWith(".example.com") || host == "example.com") {
+            return url
+        }
+        ensureNewPipeInitialized(okHttpClient)
+        return runCatching {
+            YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(
+                videoId.ifBlank { DEFAULT_VIDEO_ID },
+                url
+            )
+        }.getOrDefault(url)
     }
 
     enum class OpType {
@@ -49,9 +148,14 @@ object YouTubeDecipherer {
     )
 
     /**
-     * Deciphers a YouTube signature cipher string and returns the fully working direct stream URL.
+     * Deciphers a YouTube signature cipher string and deobfuscates the `&n=` throttling parameter
+     * to return a fully working direct stream URL.
      */
-    suspend fun decipher(cipherText: String, okHttpClient: OkHttpClient? = null): String = withContext(Dispatchers.IO) {
+    suspend fun decipher(
+        cipherText: String,
+        okHttpClient: OkHttpClient? = null,
+        videoId: String = DEFAULT_VIDEO_ID
+    ): String = withContext(Dispatchers.IO) {
         val client = okHttpClient ?: OkHttpClient()
         val params = parseQueryString(cipherText)
         val s = params["s"] ?: return@withContext ""
@@ -70,15 +174,39 @@ object YouTubeDecipherer {
             s
         }
 
-        val ops = getDecipherOps(client)
-        val decipheredSignature = if (ops.isNotEmpty()) {
-            applyOps(decodedSignature, ops)
+        ensureNewPipeInitialized(client)
+        val targetVideoId = videoId.ifBlank { DEFAULT_VIDEO_ID }
+
+        // 1. Primary: NewPipeExtractor YoutubeJavaScriptPlayerManager (exact mechanism from Metrolist / ArchiveTune)
+        val newPipeSig = runCatching {
+            YoutubeJavaScriptPlayerManager.deobfuscateSignature(targetVideoId, decodedSignature)
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+
+        val decipheredSignature = if (newPipeSig != null) {
+            newPipeSig
         } else {
-            decodedSignature
+            // 2. Secondary fallback: local JS regex parser
+            val ops = getDecipherOps(client)
+            if (ops.isNotEmpty()) {
+                applyOps(decodedSignature, ops)
+            } else {
+                // If deciphering completely failed on a real googlevideo URL, reject rather than returning an invalid signature
+                if (decodedUrl.contains("googlevideo.com")) {
+                    return@withContext ""
+                }
+                decodedSignature
+            }
         }
 
+        val encodedSig = try {
+            URLEncoder.encode(decipheredSignature, "UTF-8")
+        } catch (_: Exception) {
+            decipheredSignature
+        }
         val separator = if (decodedUrl.contains("?")) "&" else "?"
-        "$decodedUrl$separator$sp=$decipheredSignature"
+        val signedUrl = "$decodedUrl$separator$sp=$encodedSig"
+
+        deobfuscateThrottlingParameter(signedUrl, targetVideoId, client)
     }
 
     private fun parseQueryString(query: String): Map<String, String> {
@@ -261,3 +389,4 @@ object YouTubeDecipherer {
         return list.joinToString("")
     }
 }
+

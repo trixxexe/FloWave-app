@@ -159,6 +159,7 @@ dependencies {
   // production download lifecycle. See THIRD_PARTY_NOTICES.md.
   implementation(libs.youtubedl.android.library)
   implementation(libs.youtubedl.android.ffmpeg)
+  implementation(libs.newpipe.extractor)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

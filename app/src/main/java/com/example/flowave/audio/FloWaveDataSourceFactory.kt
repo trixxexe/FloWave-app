@@ -127,6 +127,9 @@ class FloWaveDataSourceFactory(
             throw IOException("Online stream resolution previously failed for $videoId after retry")
         }
         val isRetry = attempts > 0
+        if (isRetry) {
+            FloWaveCacheManager.invalidate(videoId)
+        }
 
         val future = CompletableFuture<ResolvedStreamSource>()
         val job = resolutionScope.launch {
@@ -202,6 +205,7 @@ class FloWaveDataSourceFactory(
         defaultHttpDataSourceFactory.setUserAgent(ua)
         headers["User-Agent"] = ua
         headers.putAll(resolution.requestHeaders)
+        upstreamHttpDataSourceFactory.setDefaultRequestProperties(headers)
 
         val resolvedUri = Uri.parse(resolution.url)
         return dataSpec.buildUpon()
@@ -261,7 +265,23 @@ class FloWaveDataSourceFactory(
             val openStartedAt = System.nanoTime()
 
             val openedLength = try {
-                resolvingDataSource.open(dataSpec)
+                try {
+                    resolvingDataSource.open(dataSpec)
+                } catch (firstError: HttpDataSource.InvalidResponseCodeException) {
+                    if (videoId != null && OnlinePlaybackPolicy.isRefreshableHttpStatus(firstError.responseCode)) {
+                        logger.info("online", "stream_open_transparent_retry", context = mapOf(
+                            "videoId" to videoId,
+                            "httpStatus" to firstError.responseCode
+                        ))
+                        runCatching { resolvingDataSource.close() }
+                        resetAttempts(videoId)
+                        streamRepository.invalidateStreamUrl(videoId)
+                        FloWaveCacheManager.invalidate(videoId)
+                        resolvingDataSource.open(dataSpec)
+                    } else {
+                        throw firstError
+                    }
+                }
             } catch (error: Exception) {
                 val cancelled = error is InterruptedException ||
                         error is kotlinx.coroutines.CancellationException ||

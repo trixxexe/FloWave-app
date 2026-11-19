@@ -2,6 +2,8 @@ package com.example.flowave.ui.screens
 
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
@@ -22,7 +24,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,15 +33,12 @@ import com.example.flowave.data.remote.InnerTubeRepository
 import com.example.flowave.data.ytmusic.CookieNormalizer
 import com.example.flowave.data.ytmusic.YtMusicAuthManager
 import com.example.flowave.ui.theme.*
+import com.example.flowave.utils.FloWaveConstants
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONObject
-import kotlin.coroutines.resume
 
 private const val LOGIN_URL =
-    "https://accounts.google.com/ServiceLogin?ltmpl=music&service=youtube&passive=true&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F"
+    "https://accounts.google.com/ServiceLogin?ltmpl=music&service=youtube&passive=true&continue=https%3A%2F%2Fmusic.youtube.com"
 
 private fun hasSessionTokens(cookies: String?): Boolean {
     if (cookies.isNullOrBlank()) return false
@@ -50,18 +48,33 @@ private fun hasSessionTokens(cookies: String?): Boolean {
         cookies.contains("APISID=")
     val hasSid = cookies.contains("SID=") ||
         cookies.contains("__Secure-3PSID=") ||
-        cookies.contains("__Secure-1PSID=")
+        cookies.contains("__Secure-1PSID=") ||
+        cookies.contains("LOGIN_INFO=")
     return hasSapisid && hasSid
+}
+
+private fun isAuthenticatedYouTubePage(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val lower = url.lowercase()
+    if (lower.contains("accounts.google.") || lower.contains("accounts.youtube.com") || lower.contains("ServiceLogin".lowercase())) {
+        return false
+    }
+    return lower.contains("music.youtube.com") ||
+        lower.contains("www.youtube.com") ||
+        lower.contains("m.youtube.com") ||
+        lower.startsWith("https://youtube.com")
 }
 
 private fun readYouTubeCookies(): String? = try {
     val cm = CookieManager.getInstance()
     cm.flush()
+    // Strictly read from YouTube domains only (never accounts.google.com) so we only
+    // capture cookies after Google's SetSID redirect has established the .youtube.com session.
     val domains = listOf(
         "https://music.youtube.com",
         "https://www.youtube.com",
-        "https://accounts.google.com",
-        "https://youtube.com",
+        "https://m.youtube.com",
+        "https://youtube.com"
     )
     val cookieMap = mutableMapOf<String, String>()
     for (domain in domains) {
@@ -78,61 +91,8 @@ private fun readYouTubeCookies(): String? = try {
         }
     }
     if (cookieMap.isEmpty()) null else cookieMap.entries.joinToString("; ") { "${it.key}=${it.value}" }
-} catch (error: Exception) {
+} catch (_: Exception) {
     null
-}
-
-private data class ExtractedYtConfig(
-    val visitorData: String? = null,
-    val dataSyncId: String? = null,
-    val sessionIndex: String = "0"
-)
-
-private suspend fun extractYtConfigFromWebView(webView: WebView?): ExtractedYtConfig {
-    if (webView == null) return ExtractedYtConfig()
-    return withTimeoutOrNull(1800L) {
-        suspendCancellableCoroutine { cont ->
-            val script = """
-                (function() {
-                    try {
-                        var cfg = (window.ytcfg && window.ytcfg.data_) ? window.ytcfg.data_ : ((window.yt && window.yt.config_) ? window.yt.config_ : {});
-                        var vd = (window.ytcfg && window.ytcfg.get) ? window.ytcfg.get('VISITOR_DATA') : (cfg.VISITOR_DATA || '');
-                        var ds = (window.ytcfg && window.ytcfg.get) ? window.ytcfg.get('DATASYNC_ID') : (cfg.DATASYNC_ID || '');
-                        var si = (window.ytcfg && window.ytcfg.get) ? window.ytcfg.get('SESSION_INDEX') : (cfg.SESSION_INDEX || '0');
-                        return JSON.stringify({
-                            visitorData: vd || '',
-                            dataSyncId: ds || '',
-                            sessionIndex: String(si || '0')
-                        });
-                    } catch (e) {
-                        return '{}';
-                    }
-                })();
-            """.trimIndent()
-            webView.post {
-                webView.evaluateJavascript(script) { raw ->
-                    if (!cont.isActive) return@evaluateJavascript
-                    try {
-                        val unquoted = raw?.trim()?.removePrefix("\"")?.removeSuffix("\"")
-                            ?.replace("\\\"", "\"")
-                            ?.replace("\\\\", "\\")
-                            .orEmpty()
-                        val json = JSONObject(unquoted.ifBlank { "{}" })
-                        val vd = json.optString("visitorData").takeIf { it.isNotBlank() && it != "null" }
-                        val rawDs = json.optString("dataSyncId").takeIf { it.isNotBlank() && it != "null" }
-                        val cleanDs = rawDs?.let { ds ->
-                            val primary = ds.substringBefore("||")
-                            primary.ifBlank { ds.substringAfter("||") }.takeIf { it.isNotBlank() }
-                        }
-                        val si = json.optString("sessionIndex", "0").ifBlank { "0" }
-                        cont.resume(ExtractedYtConfig(visitorData = vd, dataSyncId = cleanDs, sessionIndex = si))
-                    } catch (_: Exception) {
-                        cont.resume(ExtractedYtConfig())
-                    }
-                }
-            }
-        }
-    } ?: ExtractedYtConfig()
 }
 
 @Composable
@@ -154,50 +114,73 @@ fun YouTubeLoginScreen(
     var manualCookieText by remember { mutableStateOf("") }
     var manualCookieError by remember { mutableStateOf<String?>(null) }
 
-    suspend fun finalizeConnection(rawCookies: String?, webView: WebView?) {
-        if (isVerifying || connectedName != null) return
-        isVerifying = true
-        val cleanCookies = runCatching { CookieNormalizer.normalize(rawCookies) }.getOrDefault(rawCookies.orEmpty())
-        val ytConfig = extractYtConfigFromWebView(webView)
-        authManager.connect(
+    var capturedVisitorData by remember { mutableStateOf<String?>(null) }
+    var capturedDataSyncId by remember { mutableStateOf<String?>(null) }
+    var capturedSessionIndex by remember { mutableIntStateOf(0) }
+
+    fun connectAndVerifySession(rawCookies: String?) {
+        val cookies = rawCookies ?: readYouTubeCookies()
+        if (!hasSessionTokens(cookies)) return
+        val cleanCookies = runCatching { CookieNormalizer.normalize(cookies) }.getOrDefault(cookies.orEmpty())
+
+        // 1. Connect immediately in memory and schedule non-cancellable DataStore write on authManager.scope
+        val connected = authManager.connectImmediate(
             rawCookieHeader = cleanCookies,
-            accountName = "Google Account",
-            channelHandle = null,
-            photoUrl = null,
-            visitorData = ytConfig.visitorData,
-            dataSyncId = ytConfig.dataSyncId,
-            authUserIndex = ytConfig.sessionIndex.toIntOrNull() ?: 0
+            accountName = authManager.connection.value.accountName.ifBlank { "YouTube Music Account" },
+            channelHandle = authManager.connection.value.channelHandle,
+            photoUrl = authManager.connection.value.photoUrl,
+            visitorData = capturedVisitorData,
+            dataSyncId = capturedDataSyncId,
+            authUserIndex = capturedSessionIndex
         )
-        withTimeoutOrNull(4000L) { authManager.awaitLoadedConnection() }
-        val info = runCatching { innerTubeRepo.fetchAccountInfo() }.getOrNull()
-        val displayName = info?.accountName?.takeIf { it.isNotBlank() } ?: "YouTube Music Account"
-        if (info != null) {
-            authManager.updateAccountIdentity(
-                accountName = info.accountName,
-                channelHandle = info.channelHandle,
-                photoUrl = info.photoUrl,
-                visitorData = ytConfig.visitorData,
-                dataSyncId = ytConfig.dataSyncId
-            )
+        if (!connected) return
+
+        if (connectedName == null) {
+            connectedName = authManager.connection.value.accountName.ifBlank { "YouTube Music Account" }
         }
-        connectedName = displayName
-        isVerifying = false
+
+        // 2. Fetch account profile in authManager.scope so navigating back never cancels profile resolution
+        if (!isVerifying) {
+            isVerifying = true
+            authManager.scope.launch {
+                val info = runCatching { innerTubeRepo.fetchAccountInfo() }.getOrNull()
+                if (info != null && info.accountName.isNotBlank()) {
+                    authManager.updateAccountIdentity(
+                        accountName = info.accountName,
+                        channelHandle = info.channelHandle,
+                        photoUrl = info.photoUrl,
+                        visitorData = capturedVisitorData,
+                        dataSyncId = capturedDataSyncId
+                    )
+                    connectedName = info.accountName
+                }
+                isVerifying = false
+            }
+        }
     }
 
-    // Polling loop watching for successful login redirect to music.youtube.com
-    LaunchedEffect(connectedName, isVerifying, activeWebView) {
-        if (connectedName != null || isVerifying) return@LaunchedEffect
-        while (true) {
-            val currentUrl = activeWebView?.url
-            val isAtTarget = currentUrl?.contains("music.youtube.com") == true
-            if (isAtTarget) {
+    // Ensure pressing Back or leaving composition always saves any session cookies obtained in WebView
+    DisposableEffect(Unit) {
+        onDispose {
+            val cookies = readYouTubeCookies()
+            if (hasSessionTokens(cookies)) {
+                connectAndVerifySession(cookies)
+            }
+        }
+    }
+
+    // Background watcher that detects session cookies once Google's SetSID redirect lands on YouTube Music
+    LaunchedEffect(activeWebView) {
+        while (connectedName == null) {
+            val currentUrl = activeWebView?.url.orEmpty()
+            if (isAuthenticatedYouTubePage(currentUrl)) {
                 val cookies = readYouTubeCookies()
                 if (hasSessionTokens(cookies)) {
-                    finalizeConnection(cookies, activeWebView)
+                    connectAndVerifySession(cookies)
                     break
                 }
             }
-            delay(1000L)
+            delay(800L)
         }
     }
 
@@ -216,7 +199,15 @@ fun YouTubeLoginScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
-                    onClick = onBack,
+                    onClick = {
+                        val cookies = readYouTubeCookies()
+                        if (hasSessionTokens(cookies)) {
+                            connectAndVerifySession(cookies)
+                            onConnected()
+                        } else {
+                            onBack()
+                        }
+                    },
                     modifier = Modifier
                         .size(40.dp)
                         .clip(RoundedCornerShape(12.dp))
@@ -241,8 +232,12 @@ fun YouTubeLoginScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Ad-free streaming, playlists & liked songs",
-                        color = TextMuted,
+                        text = if (connectedName != null) {
+                            "Connected • $connectedName"
+                        } else {
+                            "Ad-free streaming, playlists & liked songs"
+                        },
+                        color = if (connectedName != null) CyanNeon else TextMuted,
                         fontSize = 12.sp
                     )
                 }
@@ -314,44 +309,100 @@ fun YouTubeLoginScreen(
 
                             // Strip WebView markers so Google Sign-In permits standard login
                             val defaultUa = settings.userAgentString
-                            val cleanUa = if (!defaultUa.isNullOrBlank()) {
+                            val cleanMobileUa = if (!defaultUa.isNullOrBlank()) {
                                 defaultUa.replace("; wv", "")
                                     .replace("Version/4.0 ", "")
                                     .replace("Version/4.0", "")
                                     .replace(Regex("Version/\\d+\\.\\d+\\s*"), "")
                             } else {
-                                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+                                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
                             }
-                            settings.userAgentString = cleanUa
+                            settings.userAgentString = cleanMobileUa
 
                             val cm = CookieManager.getInstance()
                             cm.setAcceptCookie(true)
                             cm.setAcceptThirdPartyCookies(this, true)
 
-                            webViewClient = object : WebViewClient() {
-                                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
-                                    super.doUpdateVisitedHistory(view, url, isReload)
-                                    if (isVerifying || connectedName != null) return
-                                    if (url?.contains("music.youtube.com") == true) {
-                                        CookieManager.getInstance().flush()
-                                        val cookies = readYouTubeCookies()
-                                        if (hasSessionTokens(cookies)) {
-                                            coroutineScope.launch {
-                                                finalizeConnection(cookies, view)
+                            addJavascriptInterface(
+                                object {
+                                    @JavascriptInterface
+                                    fun onRetrieveVisitorData(newVisitorData: String?) {
+                                        if (!newVisitorData.isNullOrBlank() && newVisitorData != "null") {
+                                            capturedVisitorData = newVisitorData
+                                            val cookies = readYouTubeCookies()
+                                            if (hasSessionTokens(cookies)) {
+                                                connectAndVerifySession(cookies)
                                             }
                                         }
                                     }
+
+                                    @JavascriptInterface
+                                    fun onRetrieveDataSyncId(newDataSyncId: String?) {
+                                        if (!newDataSyncId.isNullOrBlank() && newDataSyncId != "null") {
+                                            capturedDataSyncId = newDataSyncId
+                                            val cookies = readYouTubeCookies()
+                                            if (hasSessionTokens(cookies)) {
+                                                connectAndVerifySession(cookies)
+                                            }
+                                        }
+                                    }
+
+                                    @JavascriptInterface
+                                    fun onRetrieveSessionIndex(newSessionIndex: String?) {
+                                        newSessionIndex?.toIntOrNull()?.let { idx ->
+                                            capturedSessionIndex = idx
+                                        }
+                                    }
+                                },
+                                "Android"
+                            )
+
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    val targetUri = request?.url ?: return false
+                                    val scheme = targetUri.scheme?.lowercase().orEmpty()
+
+                                    // Block external intent:// or market:// app links and stay inside WebView
+                                    if (scheme != "http" && scheme != "https") {
+                                        view?.loadUrl("https://music.youtube.com")
+                                        return true
+                                    }
+                                    return false
                                 }
 
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
                                     loadProgressVisible = false
-                                    if (isVerifying || connectedName != null) return
                                     CookieManager.getInstance().flush()
-                                    val cookies = readYouTubeCookies()
-                                    if (url?.contains("music.youtube.com") == true && hasSessionTokens(cookies)) {
-                                        coroutineScope.launch {
-                                            finalizeConnection(cookies, view)
+
+                                    if (isAuthenticatedYouTubePage(url)) {
+                                        view?.evaluateJavascript(
+                                            """
+                                            (function() {
+                                                try {
+                                                    var vd = (window.yt && window.yt.config_ && window.yt.config_.VISITOR_DATA) ||
+                                                             (window.ytcfg && window.ytcfg.get && window.ytcfg.get('VISITOR_DATA')) ||
+                                                             (window.ytcfg && window.ytcfg.data_ && window.ytcfg.data_.VISITOR_DATA) || '';
+                                                    var ds = (window.yt && window.yt.config_ && window.yt.config_.DATASYNC_ID) ||
+                                                             (window.ytcfg && window.ytcfg.get && window.ytcfg.get('DATASYNC_ID')) ||
+                                                             (window.ytcfg && window.ytcfg.data_ && window.ytcfg.data_.DATASYNC_ID) || '';
+                                                    var si = (window.yt && window.yt.config_ && window.yt.config_.SESSION_INDEX) ||
+                                                             (window.ytcfg && window.ytcfg.get && window.ytcfg.get('SESSION_INDEX')) || '0';
+                                                    if (vd) window.Android.onRetrieveVisitorData(String(vd));
+                                                    if (ds) window.Android.onRetrieveDataSyncId(String(ds));
+                                                    if (si) window.Android.onRetrieveSessionIndex(String(si));
+                                                } catch (e) {}
+                                            })();
+                                            """.trimIndent(),
+                                            null
+                                        )
+
+                                        val cookies = readYouTubeCookies()
+                                        if (hasSessionTokens(cookies)) {
+                                            connectAndVerifySession(cookies)
                                         }
                                     }
                                 }
@@ -411,7 +462,13 @@ fun YouTubeLoginScreen(
                             )
 
                             Button(
-                                onClick = onConnected,
+                                onClick = {
+                                    val cookies = readYouTubeCookies()
+                                    if (hasSessionTokens(cookies)) {
+                                        connectAndVerifySession(cookies)
+                                    }
+                                    onConnected()
+                                },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = CyanNeon,
                                     contentColor = PureBlack
@@ -477,7 +534,7 @@ fun YouTubeLoginScreen(
                                 val normalized = CookieNormalizer.normalize(manualCookieText)
                                 showManualCookieDialog = false
                                 coroutineScope.launch {
-                                    finalizeConnection(normalized, activeWebView)
+                                    connectAndVerifySession(normalized)
                                 }
                             } catch (e: Exception) {
                                 manualCookieError = e.message ?: "Invalid cookie format."

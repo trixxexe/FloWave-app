@@ -727,7 +727,9 @@ class FloWaveAudioEngine(private val context: Context) {
         return builder.build()
     }
 
-    fun setQueueAndPlay(queue: List<Track>, startIndex: Int = 0) {
+    private var onlinePlayRequestJob: Job? = null
+
+    fun setQueueAndPlay(queue: List<Track>, startIndex: Int = 0, forcePrepare: Boolean = false) {
         logger.info("queue", "set_queue", context = mapOf(
             "count" to queue.size,
             "startIndex" to startIndex,
@@ -741,6 +743,8 @@ class FloWaveAudioEngine(private val context: Context) {
         ))
         if (queue.isEmpty()) return
         val player = exoPlayer ?: return
+        dataSourceFactory?.clearAllAttempts()
+        trackRetryCount.clear()
 
         val normalizedQueue = queue.map(::canonicalTrack)
         val playableEntries = normalizedQueue.mapNotNull { track ->
@@ -753,9 +757,10 @@ class FloWaveAudioEngine(private val context: Context) {
         val playableQueue = playableEntries.map { it.first }
 
         val sameQueue = _playbackState.value.queue.map { it.id } == playableQueue.map { it.id }
-        if (sameQueue && _playbackState.value.currentQueueIndex == effectiveIndex &&
+        if (!forcePrepare && sameQueue && _playbackState.value.currentQueueIndex == effectiveIndex &&
             player.currentMediaItem?.mediaId == playableQueue.getOrNull(effectiveIndex)?.id &&
-            player.playbackState != Player.STATE_IDLE
+            player.playbackState == Player.STATE_READY &&
+            _playbackState.value.errorMessage == null
         ) {
             logger.debug("queue", "set_queue_idempotent", context = mapOf(
                 "index" to effectiveIndex,
@@ -770,6 +775,7 @@ class FloWaveAudioEngine(private val context: Context) {
             queue = playableQueue,
             currentQueueIndex = effectiveIndex,
             currentTrack = playableQueue.getOrNull(effectiveIndex),
+            isBuffering = true,
             errorMessage = null
         )
 
@@ -796,48 +802,47 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     /** Starts an online track immediately with buffering feedback and background radio queue continuation. */
-    suspend fun playOnlineTrack(track: com.example.flowave.data.model.InnerTubeTrack) {
+    fun playOnlineTrack(track: com.example.flowave.data.model.InnerTubeTrack) {
         logger.info("online", "play_requested", context = mapOf("videoId" to track.id))
-        dataSourceFactory?.resetAttempts(track.id)
-        val onlineTrack = innerTubeRepo.createOnlineTrack(track)
-        trackRetryCount.remove(onlineTrack.id)
+        onlinePlayRequestJob?.cancel()
+        onlinePlayRequestJob = scope.launch {
+            dataSourceFactory?.resetAttempts(track.id)
+            val onlineTrack = canonicalTrack(innerTubeRepo.createOnlineTrack(track))
+            trackRetryCount.remove(onlineTrack.id)
 
-        withContext(Dispatchers.Main) {
             _playbackState.value = _playbackState.value.copy(
                 currentTrack = onlineTrack,
                 isBuffering = true,
                 errorMessage = null
             )
-        }
 
-        withContext(Dispatchers.IO) {
-            runCatching { innerTubeRepo.getStreamResolution(track.id) }
-        }
+            withContext(Dispatchers.IO) {
+                runCatching { innerTubeRepo.getStreamResolution(track.id) }
+            }
 
-        val updatedOnlineTrack = canonicalTrack(innerTubeRepo.createOnlineTrack(track))
-        withContext(Dispatchers.Main) {
-            setQueueAndPlay(listOf(updatedOnlineTrack), 0)
-        }
+            val updatedOnlineTrack = canonicalTrack(innerTubeRepo.createOnlineTrack(track))
+            setQueueAndPlay(listOf(updatedOnlineTrack), 0, forcePrepare = true)
 
-        // Fetch related YouTube Music radio queue in the background so playback continues seamlessly
-        scope.launch(Dispatchers.IO) {
-            val radioTracks = runCatching { innerTubeRepo.fetchRadioQueue(track.id) }.getOrDefault(emptyList())
-            if (radioTracks.isNotEmpty()) {
-                withContext(Dispatchers.Main) {
-                    val currentState = _playbackState.value
-                    if (currentState.currentTrack?.id == updatedOnlineTrack.id && currentState.queue.size <= 3) {
-                        val existingIds = currentState.queue.map { it.id }.toSet()
-                        val newTracks = radioTracks
-                            .map { innerTubeRepo.createOnlineTrack(it) }
-                            .map(::canonicalTrack)
-                            .filter { it.id !in existingIds }
-                            .take(15)
-                        if (newTracks.isNotEmpty()) {
-                            val updatedQueue = currentState.queue + newTracks
-                            _playbackState.value = currentState.copy(queue = updatedQueue)
-                            val mediaItems = newTracks.mapNotNull(::createMediaItem)
-                            exoPlayer?.addMediaItems(mediaItems)
-                            persistQueueAndState()
+            // Fetch related YouTube Music radio queue in the background so playback continues seamlessly
+            launch(Dispatchers.IO) {
+                val radioTracks = runCatching { innerTubeRepo.fetchRadioQueue(track.id) }.getOrDefault(emptyList())
+                if (radioTracks.isNotEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        val currentState = _playbackState.value
+                        if (currentState.currentTrack?.id == updatedOnlineTrack.id && currentState.queue.size <= 3) {
+                            val existingIds = currentState.queue.map { it.id }.toSet()
+                            val newTracks = radioTracks
+                                .map { innerTubeRepo.createOnlineTrack(it) }
+                                .map(::canonicalTrack)
+                                .filter { it.id !in existingIds }
+                                .take(15)
+                            if (newTracks.isNotEmpty()) {
+                                val updatedQueue = currentState.queue + newTracks
+                                _playbackState.value = currentState.copy(queue = updatedQueue)
+                                val mediaItems = newTracks.mapNotNull(::createMediaItem)
+                                exoPlayer?.addMediaItems(mediaItems)
+                                persistQueueAndState()
+                            }
                         }
                     }
                 }
@@ -846,59 +851,60 @@ class FloWaveAudioEngine(private val context: Context) {
     }
 
     /** Plays a list of online tracks (e.g., from a playlist, search, or home shelf) starting at startIndex. */
-    suspend fun playOnlineQueue(
+    fun playOnlineQueue(
         tracks: List<com.example.flowave.data.model.InnerTubeTrack>,
         startIndex: Int = 0
     ) {
         if (tracks.isEmpty()) return
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
         val selected = tracks[safeIndex]
-        dataSourceFactory?.clearAllAttempts()
-        trackRetryCount.clear()
-        val mappedQueue = tracks.map { innerTubeRepo.createOnlineTrack(it) }
+        onlinePlayRequestJob?.cancel()
+        onlinePlayRequestJob = scope.launch {
+            dataSourceFactory?.clearAllAttempts()
+            trackRetryCount.clear()
+            val mappedQueue = tracks.map { canonicalTrack(innerTubeRepo.createOnlineTrack(it)) }
 
-        withContext(Dispatchers.Main) {
             _playbackState.value = _playbackState.value.copy(
                 currentTrack = mappedQueue[safeIndex],
                 isBuffering = true,
                 errorMessage = null
             )
-        }
 
-        withContext(Dispatchers.IO) {
-            runCatching { innerTubeRepo.getStreamResolution(selected.id) }
-        }
+            withContext(Dispatchers.IO) {
+                runCatching { innerTubeRepo.getStreamResolution(selected.id) }
+            }
 
-        val refreshedQueue = tracks.map { innerTubeRepo.createOnlineTrack(it) }
-        withContext(Dispatchers.Main) {
-            setQueueAndPlay(refreshedQueue, safeIndex)
+            val refreshedQueue = tracks.map { canonicalTrack(innerTubeRepo.createOnlineTrack(it)) }
+            setQueueAndPlay(refreshedQueue, safeIndex, forcePrepare = true)
         }
     }
 
     fun playTrack(track: Track) {
         logger.info("player", "track_requested", context = mapOf("trackId" to track.id, "source" to track.source))
         val normalizedTrack = canonicalTrack(track)
-        PlaybackIdentity.sourceId(normalizedTrack)?.let { dataSourceFactory?.resetAttempts(it) }
+        val sourceId = PlaybackIdentity.sourceId(normalizedTrack)
+        if (normalizedTrack.isOnline && !sourceId.isNullOrBlank()) {
+            playOnlineTrack(
+                com.example.flowave.data.model.InnerTubeTrack(
+                    id = sourceId,
+                    title = normalizedTrack.title,
+                    artist = normalizedTrack.artist,
+                    durationText = "${normalizedTrack.durationMs / 60000}:${String.format("%02d", (normalizedTrack.durationMs / 1000) % 60)}",
+                    thumbnailUrl = normalizedTrack.artworkUri.orEmpty(),
+                    album = normalizedTrack.album
+                )
+            )
+            return
+        }
+        sourceId?.let { dataSourceFactory?.resetAttempts(it) }
         trackRetryCount.remove(normalizedTrack.id)
         val currentQueue = _playbackState.value.queue.toMutableList()
         val index = currentQueue.indexOfFirst { it.id == normalizedTrack.id }
         if (index >= 0) {
-            if (index == _playbackState.value.currentQueueIndex &&
-                exoPlayer?.currentMediaItem?.mediaId == normalizedTrack.id &&
-                exoPlayer?.playbackState != Player.STATE_IDLE
-            ) {
-                logger.debug("player", "track_selection_idempotent", context = mapOf(
-                    "trackId" to normalizedTrack.id,
-                    "source" to normalizedTrack.source,
-                    "online" to normalizedTrack.isOnline
-                ))
-                exoPlayer?.play()
-                return
-            }
-            setQueueAndPlay(currentQueue, index)
+            setQueueAndPlay(currentQueue, index, forcePrepare = true)
         } else {
             currentQueue.add(0, normalizedTrack)
-            setQueueAndPlay(currentQueue, 0)
+            setQueueAndPlay(currentQueue, 0, forcePrepare = true)
         }
     }
 

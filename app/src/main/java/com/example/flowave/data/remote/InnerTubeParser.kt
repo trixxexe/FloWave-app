@@ -373,7 +373,8 @@ object InnerTubeParser {
     suspend fun parsePlayerResponse(
         json: JSONObject,
         okHttpClient: okhttp3.OkHttpClient? = null,
-        allowHlsFallback: Boolean = true
+        allowHlsFallback: Boolean = true,
+        videoId: String = "dQw4w9WgXcQ"
     ): String? {
         val playabilityStatus = json.optJSONObject("playabilityStatus")
         val status = playabilityStatus?.optString("status")
@@ -381,12 +382,17 @@ object InnerTubeParser {
             return null
         }
 
+        val resolvedVideoId = json.optJSONObject("videoDetails")
+            ?.optString("videoId")
+            ?.takeIf { it.isNotBlank() }
+            ?: videoId
+
         val streamingData = json.optJSONObject("streamingData") ?: return null
 
         // 1. Inspect adaptiveFormats first, then formats as fallback
         val adaptiveFormats = streamingData.optJSONArray("adaptiveFormats")
         var extractedUrl = if (adaptiveFormats != null && adaptiveFormats.length() > 0) {
-            parseAudioUrl(adaptiveFormats, okHttpClient)
+            parseAudioUrl(adaptiveFormats, okHttpClient, resolvedVideoId)
         } else {
             null
         }
@@ -394,7 +400,7 @@ object InnerTubeParser {
         if (extractedUrl.isNullOrBlank()) {
             val formats = streamingData.optJSONArray("formats")
             if (formats != null && formats.length() > 0) {
-                extractedUrl = parseAudioUrl(formats, okHttpClient)
+                extractedUrl = parseAudioUrl(formats, okHttpClient, resolvedVideoId)
             }
         }
 
@@ -481,9 +487,14 @@ object InnerTubeParser {
     /**
      * Filters for audio streams (mimeType starting with "audio/"), checks for valid direct
      * http/https URL (or deciphers signatureCipher via YouTubeDecipherer ONLY if direct URL is absent),
-     * and prioritizes itag 251 (Opus) and itag 140 (M4A/AAC) or highest bitrate audio.
+     * deobfuscates any `&n=` throttling parameter, and prioritizes itag 251 (Opus) and itag 140 (M4A/AAC)
+     * or highest bitrate audio.
      */
-    suspend fun parseAudioUrl(formats: JSONArray, okHttpClient: okhttp3.OkHttpClient? = null): String? {
+    suspend fun parseAudioUrl(
+        formats: JSONArray,
+        okHttpClient: okhttp3.OkHttpClient? = null,
+        videoId: String = "dQw4w9WgXcQ"
+    ): String? {
         var bestOpus251: FormatCandidate? = null
         var bestOpusOther: FormatCandidate? = null
         var bestAac140: FormatCandidate? = null
@@ -498,14 +509,22 @@ object InnerTubeParser {
 
             val rawUrl = format.optString("url")
             val url = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                rawUrl
+                com.example.flowave.utils.YouTubeDecipherer.deobfuscateThrottlingParameter(
+                    url = rawUrl,
+                    videoId = videoId,
+                    okHttpClient = okHttpClient
+                )
             } else {
                 // Decipher signatureCipher only if direct url is absent
                 val cipherText = format.optString("signatureCipher").takeIf { it.isNotEmpty() }
                     ?: format.optString("cipher").takeIf { it.isNotEmpty() }
                 if (!cipherText.isNullOrEmpty()) {
                     try {
-                        com.example.flowave.utils.YouTubeDecipherer.decipher(cipherText, okHttpClient)
+                        com.example.flowave.utils.YouTubeDecipherer.decipher(
+                            cipherText = cipherText,
+                            okHttpClient = okHttpClient,
+                            videoId = videoId
+                        )
                     } catch (e: Exception) {
                         ""
                     }
